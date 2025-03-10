@@ -21,25 +21,17 @@ import (
 )
 
 func main() {
-
 	app := vii.NewApp()
-
 	app.Use(vii.MwLogger, vii.MwTimeout(10))
-
 	app.Static("./static")
 	app.Favicon()
-
 	err := app.Templates("./templates", nil)
 	if err != nil {
 		panic(err)
 	}
-
   app.At("GET /", func(w http.ResponseWriter, r *http.Request) {
 		vii.ExecuteTemplate(w, r, "index.html", nil)
 	})
-
 	app.Serve("8080")
-
-
 }
 ```
