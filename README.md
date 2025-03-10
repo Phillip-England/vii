@@ -1,8 +1,12 @@
 # vii
 Minimal servers in Go
 
-## Hello, World
+## Installation
+```bash
+go get github.com/Phillip-England/vii
+```
 
+## Hello, World
 1. Create a new `go` project
 2. Create a `./templates` dir
 3. Create a `./static` dir
