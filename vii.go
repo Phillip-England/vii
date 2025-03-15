@@ -119,53 +119,8 @@ func (app *App) Favicon(middleware ...func(http.Handler) http.Handler) {
 }
 
 func (app *App) Static(path string, middleware ...func(http.Handler) http.Handler) {
-	contentTypes := map[string]string{
-		".html":  "text/html",
-		".css":   "text/css",
-		".js":    "application/javascript",
-		".png":   "image/png",
-		".jpg":   "image/jpeg",
-		".jpeg":  "image/jpeg",
-		".gif":   "image/gif",
-		".svg":   "image/svg+xml",
-		".json":  "application/json",
-		".xml":   "application/xml",
-		".txt":   "text/plain",
-		".pdf":   "application/pdf",
-		".woff":  "font/woff",
-		".woff2": "font/woff2",
-		".ttf":   "font/ttf",
-		".eot":   "application/vnd.ms-fontobject",
-		".ico":   "image/x-icon",
-		".zip":   "application/zip",
-		".tar":   "application/x-tar",
-		".gz":    "application/gzip",
-	}
-
 	staticPath := strings.TrimRight(path, "/")
-
-	app.Mux.HandleFunc("GET "+staticPath+"/", func(w http.ResponseWriter, r *http.Request) {
-		chain(func(w http.ResponseWriter, r *http.Request) {
-			filePath := r.URL.Path[len(staticPath+"/"):]
-			fullPath := filepath.Join(".", staticPath, filePath)
-
-			file, err := os.Open(fullPath)
-			if err != nil {
-				http.Error(w, "File not found", http.StatusNotFound)
-				return
-			}
-			defer file.Close()
-
-			ext := filepath.Ext(filePath)
-			contentType, found := contentTypes[ext]
-			if !found {
-				contentType = "application/octet-stream"
-			}
-
-			w.Header().Set("Content-Type", contentType)
-			http.ServeContent(w, r, filePath, time.Now(), file)
-		}, middleware...).ServeHTTP(w, r)
-	})
+	app.Mux.Handle(staticPath+"/", http.StripPrefix(staticPath+"/", http.FileServer(http.Dir(staticPath))))
 }
 
 func (app *App) JSON(w http.ResponseWriter, status int, data interface{}) error {
