@@ -120,7 +120,13 @@ func (app *App) Favicon(middleware ...func(http.Handler) http.Handler) {
 
 func (app *App) Static(path string, middleware ...func(http.Handler) http.Handler) {
 	staticPath := strings.TrimRight(path, "/")
-	app.Mux.Handle(staticPath+"/", http.StripPrefix(staticPath+"/", http.FileServer(http.Dir(staticPath))))
+	fileServer := http.FileServer(http.Dir(staticPath))
+	stripHandler := http.StripPrefix("/"+filepath.Base(staticPath)+"/", fileServer)
+	var handler http.Handler = stripHandler
+	if len(middleware) > 0 {
+		handler = chain(stripHandler.ServeHTTP, middleware...)
+	}
+	app.Mux.Handle("GET /"+filepath.Base(staticPath)+"/", handler)
 }
 
 func (app *App) JSON(w http.ResponseWriter, status int, data interface{}) error {
