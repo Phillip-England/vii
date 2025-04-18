@@ -265,3 +265,43 @@ func ExecuteTemplate(w http.ResponseWriter, r *http.Request, filepath string, da
 	}
 	return nil
 }
+
+//=====================================
+// request / response helpers
+//=====================================
+
+// gets a url param
+func Param(r *http.Request, paramName string) string {
+	return r.URL.Query().Get(paramName)
+}
+
+// compares a provided value to a url query param
+func ParamIs(r *http.Request, paramName string, valueToCheck string) bool {
+	return r.URL.Query().Get(paramName) == valueToCheck
+}
+
+// responds from a handler with a string while setting the appropriate headers
+func WriteHTML(w http.ResponseWriter, content string) {
+	w.Header().Add("Content-Type", "text/html")
+	w.Write([]byte(content))
+}
+
+// responds from a handler as plain text while setting the appropriate headers
+func WriteString(w http.ResponseWriter, content string) {
+	w.Header().Add("Content-Type", "text/plain")
+	w.Write([]byte(content))
+}
+
+// WriteJSON responds from a handler with JSON while setting the appropriate headers
+func WriteJSON(w http.ResponseWriter, statusCode int, data interface{}) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	// Encode data to JSON and write it to the response
+	err := json.NewEncoder(w).Encode(data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return err
+	}
+	return nil
+}
