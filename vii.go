@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/a-h/templ"
 )
 
 type Group struct {
@@ -301,6 +303,16 @@ func WriteJSON(w http.ResponseWriter, statusCode int, data interface{}) error {
 	err := json.NewEncoder(w).Encode(data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return err
+	}
+	return nil
+}
+
+// responds from a handler with a templ component with the appropriate headers
+func WriteTempl(w http.ResponseWriter, r *http.Request, component templ.Component) error {
+	w.Header().Add("Content-Type", "text/html")
+	err := component.Render(r.Context(), w)
+	if err != nil {
 		return err
 	}
 	return nil
