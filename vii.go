@@ -282,15 +282,17 @@ func ParamIs(r *http.Request, paramName string, valueToCheck string) bool {
 	return r.URL.Query().Get(paramName) == valueToCheck
 }
 
-// responds from a handler with a string while setting the appropriate headers
-func WriteHTML(w http.ResponseWriter, content string) {
-	w.Header().Add("Content-Type", "text/html")
+// responds from a handler with a string as HTML and sets status code
+func WriteHTML(w http.ResponseWriter, status int, content string) {
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(status)
 	w.Write([]byte(content))
 }
 
-// responds from a handler as plain text while setting the appropriate headers
-func WriteString(w http.ResponseWriter, content string) {
-	w.Header().Add("Content-Type", "text/plain")
+// responds from a handler as plain text and sets status code
+func WriteString(w http.ResponseWriter, status int, content string) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(status)
 	w.Write([]byte(content))
 }
 
