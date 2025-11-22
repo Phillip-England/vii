@@ -32,11 +32,12 @@ func (g *Group) Use(middleware ...func(http.Handler) http.Handler) {
 	g.middleware = append(g.middleware, middleware...)
 }
 
+// UPDATED: Removed GlobalMiddleware injection here (moved to Serve)
 func (g *Group) At(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) {
 	resolvedPath := g.prefix + strings.TrimRight(strings.Split(path, " ")[1], "/")
-	method := strings.Split(path, " ")[0] // Extract HTTP method
-	allMiddleware := append(g.parent.GlobalMiddleware, g.middleware...)
-	allMiddleware = append(allMiddleware, middleware...)
+	method := strings.Split(path, " ")[0] 
+	// Only apply Group + Local middleware here
+	allMiddleware := append(g.middleware, middleware...) 
 	g.parent.Mux.HandleFunc(method+" "+resolvedPath, func(w http.ResponseWriter, r *http.Request) {
 		r = SetContext("GLOBAL", g.parent.GlobalContext, r)
 		chain(handler, allMiddleware...).ServeHTTP(w, r)
@@ -73,10 +74,12 @@ func (app *App) SetContext(key string, value any) {
 	app.GlobalContext[key] = value
 }
 
+// UPDATED: Removed GlobalMiddleware injection here (moved to Serve)
 func (app *App) At(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) {
 	app.Mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		r = SetContext("GLOBAL", app.GlobalContext, r)
-		chain(handler, append(app.GlobalMiddleware, middleware...)...).ServeHTTP(w, r)
+		// Only apply Local middleware here
+		chain(handler, middleware...).ServeHTTP(w, r)
 	})
 }
 
@@ -156,9 +159,19 @@ func (app *App) Text(w http.ResponseWriter, status int, text string) error {
 	return err
 }
 
+// UPDATED: This is the Critical Fix
+// We wrap the entire Mux in the Global Middleware here.
+// This ensures Middleware runs BEFORE the router checks if the path exists.
 func (app *App) Serve(port string) error {
 	fmt.Println("starting server on port " + port + " 🚀")
-	err := http.ListenAndServe(":"+port, app.Mux)
+	
+	// Wrap the Mux (Router) with the global middleware
+	// Note: chain applies middleware in order, but because they wrap each other,
+	// the LAST added middleware becomes the outermost shell and runs FIRST.
+	// Since you added MwCORS last in main.go, it will run first, which is perfect.
+	finalHandler := chain(app.Mux.ServeHTTP, app.GlobalMiddleware...)
+	
+	err := http.ListenAndServe(":"+port, finalHandler)
 	if err != nil {
 		return err
 	}
