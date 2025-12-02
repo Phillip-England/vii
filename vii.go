@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs" // [NEW] Required for handling embedded filesystems
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,12 +33,11 @@ func (g *Group) Use(middleware ...func(http.Handler) http.Handler) {
 	g.middleware = append(g.middleware, middleware...)
 }
 
-// UPDATED: Removed GlobalMiddleware injection here (moved to Serve)
 func (g *Group) At(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) {
 	resolvedPath := g.prefix + strings.TrimRight(strings.Split(path, " ")[1], "/")
-	method := strings.Split(path, " ")[0] 
+	method := strings.Split(path, " ")[0]
 	// Only apply Group + Local middleware here
-	allMiddleware := append(g.middleware, middleware...) 
+	allMiddleware := append(g.middleware, middleware...)
 	g.parent.Mux.HandleFunc(method+" "+resolvedPath, func(w http.ResponseWriter, r *http.Request) {
 		r = SetContext("GLOBAL", g.parent.GlobalContext, r)
 		chain(handler, allMiddleware...).ServeHTTP(w, r)
@@ -74,7 +74,6 @@ func (app *App) SetContext(key string, value any) {
 	app.GlobalContext[key] = value
 }
 
-// UPDATED: Removed GlobalMiddleware injection here (moved to Serve)
 func (app *App) At(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) {
 	app.Mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		r = SetContext("GLOBAL", app.GlobalContext, r)
@@ -83,6 +82,7 @@ func (app *App) At(path string, handler http.HandlerFunc, middleware ...func(htt
 	})
 }
 
+// Templates loads templates from disk (Legacy)
 func (app *App) Templates(path string, funcMap template.FuncMap) error {
 	strEquals := func(input string, value string) bool {
 		return input == value
@@ -113,6 +113,29 @@ func (app *App) Templates(path string, funcMap template.FuncMap) error {
 	return nil
 }
 
+// TemplatesFS loads templates from an embedded filesystem (NEW)
+// patterns example: "templates/*.html" or "templates/**/*.html"
+func (app *App) TemplatesFS(fileSystem fs.FS, patterns string, funcMap template.FuncMap) error {
+	strEquals := func(input string, value string) bool {
+		return input == value
+	}
+	vbfFuncMap := template.FuncMap{
+		"strEquals": strEquals,
+	}
+	for k, v := range funcMap {
+		vbfFuncMap[k] = v
+	}
+
+	// ParseFS handles the walking and matching of patterns natively
+	templates, err := template.New("").Funcs(vbfFuncMap).ParseFS(fileSystem, patterns)
+	if err != nil {
+		return err
+	}
+
+	app.SetContext(VII_CONTEXT, templates)
+	return nil
+}
+
 func (app *App) Favicon(middleware ...func(http.Handler) http.Handler) {
 	app.Mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		chain(func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +146,7 @@ func (app *App) Favicon(middleware ...func(http.Handler) http.Handler) {
 	})
 }
 
+// Static serves files from disk (Legacy)
 func (app *App) Static(path string, middleware ...func(http.Handler) http.Handler) {
 	staticPath := strings.TrimRight(path, "/")
 	fileServer := http.FileServer(http.Dir(staticPath))
@@ -132,6 +156,27 @@ func (app *App) Static(path string, middleware ...func(http.Handler) http.Handle
 		handler = chain(stripHandler.ServeHTTP, middleware...)
 	}
 	app.Mux.Handle("GET /"+filepath.Base(staticPath)+"/", handler)
+}
+
+// StaticEmbed serves files from an embedded filesystem (NEW)
+// urlPrefix: the URL path to serve from (e.g., "/static")
+// fileSystem: the embedded FS (e.g., staticFS)
+func (app *App) StaticEmbed(urlPrefix string, fileSystem fs.FS, middleware ...func(http.Handler) http.Handler) {
+	// Ensure the prefix is clean
+	urlPrefix = "/" + strings.Trim(urlPrefix, "/") + "/"
+
+	// Convert fs.FS to http.FileSystem
+	fileServer := http.FileServer(http.FS(fileSystem))
+
+	// Strip the prefix from the request URL so the file server sees the relative path
+	stripHandler := http.StripPrefix(urlPrefix, fileServer)
+
+	var handler http.Handler = stripHandler
+	if len(middleware) > 0 {
+		handler = chain(stripHandler.ServeHTTP, middleware...)
+	}
+
+	app.Mux.Handle("GET "+urlPrefix, handler)
 }
 
 func (app *App) JSON(w http.ResponseWriter, status int, data interface{}) error {
@@ -159,18 +204,11 @@ func (app *App) Text(w http.ResponseWriter, status int, text string) error {
 	return err
 }
 
-// UPDATED: This is the Critical Fix
-// We wrap the entire Mux in the Global Middleware here.
-// This ensures Middleware runs BEFORE the router checks if the path exists.
 func (app *App) Serve(port string) error {
 	fmt.Println("starting server on port " + port + " 🚀")
-	
-	// Wrap the Mux (Router) with the global middleware
-	// Note: chain applies middleware in order, but because they wrap each other,
-	// the LAST added middleware becomes the outermost shell and runs FIRST.
-	// Since you added MwCORS last in main.go, it will run first, which is perfect.
+
 	finalHandler := chain(app.Mux.ServeHTTP, app.GlobalMiddleware...)
-	
+
 	err := http.ListenAndServe(":"+port, finalHandler)
 	if err != nil {
 		return err
@@ -291,36 +329,30 @@ func ExecuteTemplate(w http.ResponseWriter, r *http.Request, filepath string, da
 // request / response helpers
 //=====================================
 
-// gets a url param
 func Param(r *http.Request, paramName string) string {
 	return r.URL.Query().Get(paramName)
 }
 
-// compares a provided value to a url query param
 func ParamIs(r *http.Request, paramName string, valueToCheck string) bool {
 	return r.URL.Query().Get(paramName) == valueToCheck
 }
 
-// responds from a handler with a string as HTML and sets status code
 func WriteHTML(w http.ResponseWriter, status int, content string) {
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(status)
 	w.Write([]byte(content))
 }
 
-// responds from a handler as plain text and sets status code
 func WriteString(w http.ResponseWriter, status int, content string) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(status)
 	w.Write([]byte(content))
 }
 
-// WriteJSON responds from a handler with JSON while setting the appropriate headers
 func WriteJSON(w http.ResponseWriter, statusCode int, data interface{}) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	// Encode data to JSON and write it to the response
 	err := json.NewEncoder(w).Encode(data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -329,7 +361,6 @@ func WriteJSON(w http.ResponseWriter, statusCode int, data interface{}) error {
 	return nil
 }
 
-// responds from a handler with a templ component with the appropriate headers
 func WriteTempl(w http.ResponseWriter, r *http.Request, component templ.Component) error {
 	w.Header().Add("Content-Type", "text/html")
 	err := component.Render(r.Context(), w)
