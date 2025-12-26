@@ -7,12 +7,10 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-// WSMessage is placed into request context (validated store) for MESSAGE events.
 type WSMessage struct {
 	Data []byte
 }
 
-// isWebSocketUpgrade checks if an incoming HTTP request is attempting to upgrade.
 func isWebSocketUpgrade(r *http.Request) bool {
 	if r == nil {
 		return false
@@ -22,8 +20,6 @@ func isWebSocketUpgrade(r *http.Request) bool {
 	return strings.Contains(conn, "upgrade") && upg == "websocket"
 }
 
-// wsWriter lets websocket routes use the same signature as HTTP routes.
-// Writing sends a WS message to the client.
 type wsWriter struct {
 	hdr    http.Header
 	conn   *websocket.Conn
@@ -43,27 +39,20 @@ func newWSWriter(app *App, conn *websocket.Conn, baseR *http.Request) *wsWriter 
 	}
 }
 
-func (w *wsWriter) Header() http.Header { return w.hdr }
-
-// WriteHeader is mostly a no-op for websockets, but we track it for completeness.
+func (w *wsWriter) Header() http.Header         { return w.hdr }
 func (w *wsWriter) WriteHeader(statusCode int) { w.status = statusCode }
 
-// Write sends a websocket message (binary frame) to the client.
-// After a successful send, if a DRAIN route exists for this path, it is invoked.
 func (w *wsWriter) Write(p []byte) (int, error) {
 	if err := websocket.Message.Send(w.conn, p); err != nil {
 		return 0, err
 	}
 
-	// Fire DRAIN as a "post-send" event if the route exists.
+	// Optional DRAIN hook after outbound writes.
 	if w.app != nil {
-		if dr := w.app.lookup(Method.DRAIN, w.path); dr != nil {
-			req := w.baseR.Clone(w.baseR.Context())
-			req.Method = Method.DRAIN
-			// DRAIN can optionally access the last-sent payload too
-			req = WithValidated(req, WSMessage{Data: append([]byte(nil), p...)})
-			_ = w.app.serveFor(Method.DRAIN, dr, w, req)
-		}
+		req := w.baseR.Clone(w.baseR.Context())
+		req.Method = Method.DRAIN
+		req = WithValidated(req, WSMessage{Data: append([]byte(nil), p...)})
+		w.app.dispatchWS(Method.DRAIN, w, req)
 	}
 
 	return len(p), nil

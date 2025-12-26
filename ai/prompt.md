@@ -1,8 +1,7 @@
 ---
-$at("*")
+$at("vii")
+$at("vii_test")
 $skill("rpp")
 $skill("ergo")
 $skill("modular")
 ---
-
-okay please test this library please and be robust do a bunch to make sure its working.

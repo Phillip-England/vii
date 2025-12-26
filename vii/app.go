@@ -12,13 +12,11 @@ import (
 )
 
 type App struct {
-	routes map[string]map[string]Route // method -> path -> route
-
-	// static mounts (prefix-based) for local/embedded file serving
-	static []staticMount
-
-	// embedded dirs registry for non-static assets (templates, docs, etc.)
+	mux      map[string]*http.ServeMux
+	static   []staticMount
 	embedded map[string]fs.FS
+
+	services []Service // NEW: global services
 
 	OnErr      func(app *App, route Route, r *http.Request, w http.ResponseWriter, err error)
 	OnNotFound func(app *App, r *http.Request, w http.ResponseWriter)
@@ -26,9 +24,10 @@ type App struct {
 
 func New() *App {
 	return &App{
-		routes:   make(map[string]map[string]Route),
+		mux:      make(map[string]*http.ServeMux),
 		static:   nil,
 		embedded: make(map[string]fs.FS),
+		services: nil,
 		OnErr: func(app *App, route Route, r *http.Request, w http.ResponseWriter, err error) {
 			_ = app
 			_ = route
@@ -43,19 +42,104 @@ func New() *App {
 	}
 }
 
-func (a *App) Mount(method, path string, route Route) error {
-	if a.routes == nil {
-		a.routes = make(map[string]map[string]Route)
+func (a *App) MountPattern(pattern string, route Route) error {
+	method, path, err := splitPattern(pattern)
+	if err != nil {
+		return err
 	}
-	if _, ok := a.routes[method]; !ok {
-		a.routes[method] = make(map[string]Route)
-	}
-	a.routes[method][path] = route
-	return route.OnMount(a)
+	return a.Mount(method, path, route)
 }
 
-// ServeEmbeddedFiles mounts an fs.FS at a URL prefix (e.g. "/static").
-// This is used for "static handling" (served directly to the client).
+func (a *App) Mount(method, path string, route Route) error {
+	if a.mux == nil {
+		a.mux = make(map[string]*http.ServeMux)
+	}
+	if a.embedded == nil {
+		a.embedded = make(map[string]fs.FS)
+	}
+	if path == "" {
+		return fmt.Errorf("vii: mount path is empty")
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	m := a.getMux(method)
+	mh := &mountedHandler{
+		app:   a,
+		route: route,
+	}
+	m.Handle(path, mh)
+	if err := route.OnMount(a); err != nil {
+		return err
+	}
+	mh.pipe = compilePipeline(a, route) // includes global services now
+	return nil
+}
+
+func (a *App) getMux(method string) *http.ServeMux {
+	if a.mux == nil {
+		a.mux = make(map[string]*http.ServeMux)
+	}
+	m := a.mux[method]
+	if m == nil {
+		m = http.NewServeMux()
+		a.mux[method] = m
+	}
+	return m
+}
+
+type mountedHandler struct {
+	app   *App
+	route Route
+	pipe  *compiledPipeline
+}
+
+type serviceNode struct {
+	svc        Service
+	validators []AnyValidator
+}
+
+func (h *mountedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a := h.app
+	if a == nil || h.route == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && isWebSocketUpgrade(r) && a.hasAnyWSMatch(r) {
+		a.serveWebSocket(w, r)
+		return
+	}
+	if h.pipe != nil {
+		_ = h.pipe.serve(w, r)
+		return
+	}
+	_ = a.serveFor(h.route, w, r)
+}
+
+func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if a != nil && r != nil && r.Method == http.MethodGet && isWebSocketUpgrade(r) && a.hasAnyWSMatch(r) {
+		a.serveWebSocket(w, r)
+		return
+	}
+	if a != nil && a.mux != nil {
+		if m := a.mux[r.Method]; m != nil {
+			h, pat := m.Handler(r)
+			if pat != "" {
+				h.ServeHTTP(w, r)
+				return
+			}
+		}
+	}
+	if a.tryStatic(w, r) {
+		return
+	}
+	if a.OnNotFound != nil {
+		a.OnNotFound(a, r, w)
+		return
+	}
+	http.NotFound(w, r)
+}
+
 func (a *App) ServeEmbeddedFiles(prefix string, f fs.FS) error {
 	if prefix == "" {
 		return fmt.Errorf("vii: static prefix is empty")
@@ -63,14 +147,12 @@ func (a *App) ServeEmbeddedFiles(prefix string, f fs.FS) error {
 	if !strings.HasPrefix(prefix, "/") {
 		prefix = "/" + prefix
 	}
-	// normalize: "/static/" -> "/static"
 	if len(prefix) > 1 && strings.HasSuffix(prefix, "/") {
 		prefix = strings.TrimSuffix(prefix, "/")
 	}
 	if f == nil {
 		return fmt.Errorf("vii: embedded fs is nil")
 	}
-
 	h := http.StripPrefix(prefix, http.FileServer(http.FS(f)))
 	a.static = append(a.static, staticMount{
 		prefix:  prefix,
@@ -79,8 +161,6 @@ func (a *App) ServeEmbeddedFiles(prefix string, f fs.FS) error {
 	return nil
 }
 
-// ServeLocalFiles mounts a directory on disk at a URL prefix (e.g. "/static").
-// This is dynamic (reads from disk at request time).
 func (a *App) ServeLocalFiles(prefix string, dir string) error {
 	if dir == "" {
 		return fmt.Errorf("vii: local static dir is empty")
@@ -95,8 +175,6 @@ func (a *App) ServeLocalFiles(prefix string, dir string) error {
 	return a.ServeEmbeddedFiles(prefix, os.DirFS(dir))
 }
 
-// EmbedDir registers an fs.FS under a key, intended for request-time access
-// (templates, docs, private assets) rather than direct static serving.
 func (a *App) EmbedDir(key string, f fs.FS) error {
 	if key == "" {
 		return fmt.Errorf("vii: embed key is empty")
@@ -111,7 +189,6 @@ func (a *App) EmbedDir(key string, f fs.FS) error {
 	return nil
 }
 
-// embeddedDir returns a registered embedded fs by key.
 func (a *App) embeddedDir(key string) (fs.FS, bool) {
 	if a == nil || a.embedded == nil {
 		return nil, false
@@ -120,40 +197,10 @@ func (a *App) embeddedDir(key string) (fs.FS, bool) {
 	return f, ok
 }
 
-type serviceNode struct {
-	svc        Service
-	validators []AnyValidator
-}
-
-func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if isWebSocketUpgrade(r) {
-		a.serveWebSocket(w, r)
-		return
-	}
-
-	route := a.lookup(r.Method, r.URL.Path)
-	if route == nil {
-		// If no route matches, try static mounts (prefix match).
-		if a.tryStatic(w, r) {
-			return
-		}
-		if a.OnNotFound != nil {
-			a.OnNotFound(a, r, w)
-			return
-		}
-		http.NotFound(w, r)
-		return
-	}
-
-	_ = a.serveFor(r.Method, route, w, r)
-}
-
-func (a *App) serveFor(method string, route Route, w http.ResponseWriter, r *http.Request) error {
-	_ = method
-
-	// Make the App available during the request lifecycle.
+func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) error {
 	r = withApp(r, a)
 
+	// Route validators
 	if rv, ok := route.(WithValidators); ok {
 		for _, v := range rv.Validators() {
 			if v == nil {
@@ -171,12 +218,20 @@ func (a *App) serveFor(method string, route Route, w http.ResponseWriter, r *htt
 		}
 	}
 
-	var nodes []serviceNode
+	// Global + route services (NEW)
+	var roots []Service
+	if a != nil && len(a.services) > 0 {
+		roots = append(roots, a.services...)
+	}
 	if rs, ok := route.(WithServices); ok {
-		nodes = resolveServices(rs.Services())
+		roots = append(roots, rs.Services()...)
+	}
+
+	var nodes []serviceNode
+	if len(roots) > 0 {
+		nodes = resolveServices(roots)
 		for i := range nodes {
 			n := nodes[i]
-
 			for _, v := range n.validators {
 				if v == nil {
 					continue
@@ -191,7 +246,6 @@ func (a *App) serveFor(method string, route Route, w http.ResponseWriter, r *htt
 					return err
 				}
 			}
-
 			var err error
 			r, err = n.svc.Before(r, w)
 			if err != nil {
@@ -221,36 +275,61 @@ func (a *App) serveFor(method string, route Route, w http.ResponseWriter, r *htt
 			return err
 		}
 	}
-
 	return nil
 }
 
-func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if a.lookup(Method.OPEN, path) == nil &&
-		a.lookup(Method.MESSAGE, path) == nil &&
-		a.lookup(Method.DRAIN, path) == nil &&
-		a.lookup(Method.CLOSE, path) == nil {
-		if a.OnNotFound != nil {
-			a.OnNotFound(a, r, w)
-			return
+func (a *App) dispatchWS(phase string, w http.ResponseWriter, r *http.Request) {
+	if a.mux != nil {
+		if m := a.mux[phase]; m != nil {
+			_, pat := m.Handler(r)
+			if pat != "" {
+				m.ServeHTTP(w, r)
+				return
+			}
 		}
-		http.NotFound(w, r)
-		return
 	}
+	if phase == Method.OPEN || phase == Method.MESSAGE {
+		if m := a.mux[http.MethodGet]; m != nil {
+			_, pat := m.Handler(r)
+			if pat != "" {
+				m.ServeHTTP(w, r)
+				return
+			}
+		}
+	}
+}
 
+func (a *App) hasAnyWSMatch(r *http.Request) bool {
+	if a == nil || a.mux == nil || r == nil {
+		return false
+	}
+	for _, phase := range []string{Method.OPEN, Method.MESSAGE, Method.DRAIN, Method.CLOSE} {
+		if m := a.mux[phase]; m != nil {
+			_, pat := m.Handler(r)
+			if pat != "" {
+				return true
+			}
+		}
+	}
+	if m := a.mux[http.MethodGet]; m != nil {
+		_, pat := m.Handler(r)
+		return pat != ""
+	}
+	return false
+}
+
+func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 	server := websocket.Server{
 		Handler: func(conn *websocket.Conn) {
 			base := r.Clone(r.Context())
 			base = withApp(base, a)
 			base = WithValidated(base, WSConn{Conn: conn})
-
 			writer := newWSWriter(a, conn, base)
 
-			if openRoute := a.lookup(Method.OPEN, path); openRoute != nil {
+			{
 				req := base.Clone(base.Context())
 				req.Method = Method.OPEN
-				_ = a.serveFor(Method.OPEN, openRoute, writer, req)
+				a.dispatchWS(Method.OPEN, writer, req)
 			}
 
 			var closeErr error
@@ -260,34 +339,21 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 					closeErr = err
 					break
 				}
-				if msgRoute := a.lookup(Method.MESSAGE, path); msgRoute != nil {
-					req := base.Clone(base.Context())
-					req.Method = Method.MESSAGE
-					req = WithValidated(req, WSMessage{Data: msg})
-					_ = a.serveFor(Method.MESSAGE, msgRoute, writer, req)
-				}
+				req := base.Clone(base.Context())
+				req.Method = Method.MESSAGE
+				req = WithValidated(req, WSMessage{Data: msg})
+				a.dispatchWS(Method.MESSAGE, writer, req)
 			}
 
-			if closeRoute := a.lookup(Method.CLOSE, path); closeRoute != nil {
+			{
 				req := base.Clone(base.Context())
 				req.Method = Method.CLOSE
 				req = WithValidated(req, WSClose{Err: closeErr})
-				_ = a.serveFor(Method.CLOSE, closeRoute, writer, req)
+				a.dispatchWS(Method.CLOSE, writer, req)
 			}
 		},
 	}
 	server.ServeHTTP(w, r)
-}
-
-func (a *App) lookup(method, path string) Route {
-	if a.routes == nil {
-		return nil
-	}
-	pm := a.routes[method]
-	if pm == nil {
-		return nil
-	}
-	return pm[path]
 }
 
 func resolveServices(roots []Service) []serviceNode {
@@ -339,6 +405,7 @@ func resolveServices(roots []Service) []serviceNode {
 		}
 
 		out = append(out, serviceNode{svc: s, validators: vals})
+
 		visiting[id] = false
 		visited[id] = true
 	}
@@ -348,4 +415,18 @@ func resolveServices(roots []Service) []serviceNode {
 	}
 
 	return out
+}
+
+func splitPattern(pat string) (method string, path string, err error) {
+	pat = strings.TrimSpace(pat)
+	i := strings.IndexByte(pat, ' ')
+	if i <= 0 || i == len(pat)-1 {
+		return "", "", fmt.Errorf("vii: invalid pattern %q (want: \"METHOD /path\")", pat)
+	}
+	method = strings.TrimSpace(pat[:i])
+	path = strings.TrimSpace(pat[i+1:])
+	if method == "" || path == "" {
+		return "", "", fmt.Errorf("vii: invalid pattern %q (want: \"METHOD /path\")", pat)
+	}
+	return method, path, nil
 }
