@@ -1,5 +1,4 @@
-module github.com/Phillip-England/vii
+module github.com/phillip-england/vii
 
 go 1.23.3
 
-require github.com/a-h/templ v0.3.857
