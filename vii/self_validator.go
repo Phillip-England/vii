@@ -36,6 +36,18 @@ func WrapValidatorKey[T any](k Key[T], v Validator[T]) AnyValidator {
 	})
 }
 
+// WrapValidatorOnlyKey stores ONLY by key (does NOT write into the "by type" slot).
+// Use this when you expect multiple instances of the same type in the request.
+func WrapValidatorOnlyKey[T any](k Key[T], v Validator[T]) AnyValidator {
+	return anyValidatorFunc(func(r *http.Request) (*http.Request, error) {
+		val, err := v.Validate(r)
+		if err != nil {
+			return r, err
+		}
+		return WithValid(r, k, val), nil
+	})
+}
+
 type anyValidatorFunc func(r *http.Request) (*http.Request, error)
 
 func (f anyValidatorFunc) ValidateAny(r *http.Request) (*http.Request, error) { return f(r) }
@@ -150,7 +162,10 @@ func V[T any](k Key[T], v Validator[T]) AnyValidator {
 	return WrapValidatorKey(k, v)
 }
 
-// SV is a convenience: "self validator" -> AnyValidator
+func KV[T any](k Key[T], v Validator[T]) AnyValidator {
+	return WrapValidatorOnlyKey(k, v)
+}
+
 func SV[T any](v Validator[T]) AnyValidator {
 	return WrapValidator(v)
 }

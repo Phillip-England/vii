@@ -1,0 +1,1 @@
+I want code to be modular please. If we have a core type that is composed of many types, those types should be in a module and grouped together. It should be very clear by the structure of our project that certain code belongs together. Since we are generating code, the structure of our dir tells me as a developer a lot.

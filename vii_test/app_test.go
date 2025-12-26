@@ -30,13 +30,16 @@ type logService struct {
 	log  *[]string
 }
 
+// ServiceKey enables multiple instances of the same service type to run.
+// Without this, services are de-duped by type and only one instance would execute.
+func (s logService) ServiceKey() string { return s.name }
+
 func (s logService) Before(r *http.Request, w http.ResponseWriter) (*http.Request, error) {
 	_ = w
 	*s.log = append(*s.log, "svc.before."+s.name)
 	if _, ok := vii.Validated[testValidated](r); !ok {
 		return r, errors.New("service missing validated data")
 	}
-	// Example: services can inject themselves (or computed data) into context:
 	r = vii.WithValidated(r, s)
 	return r, nil
 }

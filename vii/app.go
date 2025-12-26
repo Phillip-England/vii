@@ -1,8 +1,11 @@
 package vii
 
 import (
+	"fmt"
 	"net/http"
 	"reflect"
+
+	"golang.org/x/net/websocket"
 )
 
 type App struct {
@@ -46,6 +49,11 @@ type serviceNode struct {
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if isWebSocketUpgrade(r) {
+		a.serveWebSocket(w, r)
+		return
+	}
+
 	route := a.lookup(r.Method, r.URL.Path)
 	if route == nil {
 		if a.OnNotFound != nil {
@@ -56,7 +64,12 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1) Route-level validators (for endpoint-only data)
+	_ = a.serveFor(r.Method, route, w, r)
+}
+
+func (a *App) serveFor(method string, route Route, w http.ResponseWriter, r *http.Request) error {
+	_ = method
+
 	if rv, ok := route.(WithValidators); ok {
 		for _, v := range rv.Validators() {
 			if v == nil {
@@ -69,20 +82,17 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if a.OnErr != nil {
 					a.OnErr(a, route, r, w, err)
 				}
-				return
+				return err
 			}
 		}
 	}
 
-	// 2) Resolve service dependency graph + run service validators + Before
 	var nodes []serviceNode
 	if rs, ok := route.(WithServices); ok {
 		nodes = resolveServices(rs.Services())
-
 		for i := range nodes {
 			n := nodes[i]
 
-			// 2a) Service validators (service owns its required inputs)
 			for _, v := range n.validators {
 				if v == nil {
 					continue
@@ -94,11 +104,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if a.OnErr != nil {
 						a.OnErr(a, route, r, w, err)
 					}
-					return
+					return err
 				}
 			}
 
-			// 2b) Service.Before (may inject service data back into context)
 			var err error
 			r, err = n.svc.Before(r, w)
 			if err != nil {
@@ -106,30 +115,91 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if a.OnErr != nil {
 					a.OnErr(a, route, r, w, err)
 				}
-				return
+				return err
 			}
 		}
 	}
 
-	// 3) Route handler
 	if err := route.Handle(r, w); err != nil {
 		route.OnErr(r, w, err)
 		if a.OnErr != nil {
 			a.OnErr(a, route, r, w, err)
 		}
-		return
+		return err
 	}
 
-	// 4) After hooks (reverse order)
 	for i := len(nodes) - 1; i >= 0; i-- {
 		if err := nodes[i].svc.After(r, w); err != nil {
 			route.OnErr(r, w, err)
 			if a.OnErr != nil {
 				a.OnErr(a, route, r, w, err)
 			}
-			return
+			return err
 		}
 	}
+
+	return nil
+}
+
+func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	if a.lookup(Method.OPEN, path) == nil &&
+		a.lookup(Method.MESSAGE, path) == nil &&
+		a.lookup(Method.DRAIN, path) == nil &&
+		a.lookup(Method.CLOSE, path) == nil {
+		if a.OnNotFound != nil {
+			a.OnNotFound(a, r, w)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+
+	server := websocket.Server{
+		Handler: func(conn *websocket.Conn) {
+			// Base request for this connection; gets cloned per handler.
+			base := r.Clone(r.Context())
+
+			// Inject the connection into context so every handler can access it.
+			base = WithValidated(base, WSConn{Conn: conn})
+
+			writer := newWSWriter(a, conn, base)
+
+			// OPEN
+			if openRoute := a.lookup(Method.OPEN, path); openRoute != nil {
+				req := base.Clone(base.Context())
+				req.Method = Method.OPEN
+				_ = a.serveFor(Method.OPEN, openRoute, writer, req)
+			}
+
+			// MESSAGE loop
+			var closeErr error
+			for {
+				var msg []byte
+				if err := websocket.Message.Receive(conn, &msg); err != nil {
+					closeErr = err
+					break
+				}
+				if msgRoute := a.lookup(Method.MESSAGE, path); msgRoute != nil {
+					req := base.Clone(base.Context())
+					req.Method = Method.MESSAGE
+					req = WithValidated(req, WSMessage{Data: msg})
+					_ = a.serveFor(Method.MESSAGE, msgRoute, writer, req)
+				}
+			}
+
+			// CLOSE (with receive-loop error)
+			if closeRoute := a.lookup(Method.CLOSE, path); closeRoute != nil {
+				req := base.Clone(base.Context())
+				req.Method = Method.CLOSE
+				req = WithValidated(req, WSClose{Err: closeErr})
+				_ = a.serveFor(Method.CLOSE, closeRoute, writer, req)
+			}
+		},
+	}
+
+	server.ServeHTTP(w, r)
 }
 
 func (a *App) lookup(method, path string) Route {
@@ -143,59 +213,57 @@ func (a *App) lookup(method, path string) Route {
 	return pm[path]
 }
 
-// resolveServices flattens a service dependency graph into execution order:
-// dependencies first, then the service itself.
-// It also attaches each service's own validators (if it implements WithValidators).
-//
-// NOTE: this dedupes by concrete type to prevent accidental double-running the same
-// service type through multiple dependency paths. If you want multiple instances
-// of the same type, wrap them in distinct types.
 func resolveServices(roots []Service) []serviceNode {
 	var out []serviceNode
 
-	typeKey := func(s Service) reflect.Type {
+	serviceID := func(s Service) string {
 		if s == nil {
-			return nil
+			return ""
 		}
-		return reflect.TypeOf(s)
+		t := reflect.TypeOf(s)
+		id := t.String()
+		if sk, ok := any(s).(ServiceKeyer); ok {
+			k := sk.ServiceKey()
+			if k != "" {
+				id = id + "|" + k
+			} else {
+				id = id + "|"
+			}
+		}
+		return id
 	}
 
-	visiting := map[reflect.Type]bool{}
-	visited := map[reflect.Type]bool{}
+	visiting := map[string]bool{}
+	visited := map[string]bool{}
 
 	var visit func(s Service)
 	visit = func(s Service) {
 		if s == nil {
 			return
 		}
-		t := typeKey(s)
-		if visited[t] {
+		id := serviceID(s)
+		if visited[id] {
 			return
 		}
-		if visiting[t] {
-			// cycle: ignore re-entry to avoid infinite recursion
-			// (you can later replace with a hard error if you prefer)
-			return
+		if visiting[id] {
+			panic(fmt.Sprintf("vii: cyclic service dependency detected at %s", id))
 		}
+		visiting[id] = true
 
-		visiting[t] = true
-
-		// service -> its dependent services first
 		if ws, ok := any(s).(WithServices); ok {
 			for _, dep := range ws.Services() {
 				visit(dep)
 			}
 		}
 
-		// then the service itself
 		var vals []AnyValidator
 		if wv, ok := any(s).(WithValidators); ok {
 			vals = wv.Validators()
 		}
-		out = append(out, serviceNode{svc: s, validators: vals})
 
-		visiting[t] = false
-		visited[t] = true
+		out = append(out, serviceNode{svc: s, validators: vals})
+		visiting[id] = false
+		visited[id] = true
 	}
 
 	for _, s := range roots {
