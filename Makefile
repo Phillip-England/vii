@@ -1,5 +1,8 @@
 test:
 	go test ./...
 
-docs:
+dev:
 	go run main.go
+
+docs:
+	bun ./www/html/**/*.html
