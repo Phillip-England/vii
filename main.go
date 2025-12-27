@@ -343,7 +343,6 @@ func tmplService(name string) string {
 
 import (
 	"net/http"
-	"github.com/phillip-england/vii/vii"
 )
 
 type %s struct{}
