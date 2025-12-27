@@ -15,7 +15,6 @@ type App struct {
 	mux      map[string]*http.ServeMux
 	static   []staticMount
 	embedded map[string]fs.FS
-
 	services []Service // NEW: global services
 
 	OnErr      func(app *App, route Route, r *http.Request, w http.ResponseWriter, err error)
@@ -63,15 +62,18 @@ func (a *App) Mount(method, path string, route Route) error {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
+
 	m := a.getMux(method)
 	mh := &mountedHandler{
 		app:   a,
 		route: route,
 	}
 	m.Handle(path, mh)
+
 	if err := route.OnMount(a); err != nil {
 		return err
 	}
+
 	mh.pipe = compilePipeline(a, route) // includes global services now
 	return nil
 }
@@ -105,14 +107,17 @@ func (h *mountedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
 	if r.Method == http.MethodGet && isWebSocketUpgrade(r) && a.hasAnyWSMatch(r) {
 		a.serveWebSocket(w, r)
 		return
 	}
+
 	if h.pipe != nil {
 		_ = h.pipe.serve(w, r)
 		return
 	}
+
 	_ = a.serveFor(h.route, w, r)
 }
 
@@ -121,6 +126,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveWebSocket(w, r)
 		return
 	}
+
 	if a != nil && a.mux != nil {
 		if m := a.mux[r.Method]; m != nil {
 			h, pat := m.Handler(r)
@@ -130,9 +136,11 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
 	if a.tryStatic(w, r) {
 		return
 	}
+
 	if a.OnNotFound != nil {
 		a.OnNotFound(a, r, w)
 		return
@@ -200,7 +208,6 @@ func (a *App) embeddedDir(key string) (fs.FS, bool) {
 func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) error {
 	r = withApp(r, a)
 
-	// Route validators
 	if rv, ok := route.(WithValidators); ok {
 		for _, v := range rv.Validators() {
 			if v == nil {
@@ -209,6 +216,9 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 			var err error
 			r, err = v.ValidateAny(r)
 			if err != nil {
+				if err == ErrHalt {
+					return nil
+				}
 				route.OnErr(r, w, err)
 				if a.OnErr != nil {
 					a.OnErr(a, route, r, w, err)
@@ -218,7 +228,6 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 		}
 	}
 
-	// Global + route services (NEW)
 	var roots []Service
 	if a != nil && len(a.services) > 0 {
 		roots = append(roots, a.services...)
@@ -239,6 +248,9 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 				var err error
 				r, err = v.ValidateAny(r)
 				if err != nil {
+					if err == ErrHalt {
+						return nil
+					}
 					route.OnErr(r, w, err)
 					if a.OnErr != nil {
 						a.OnErr(a, route, r, w, err)
@@ -246,9 +258,13 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 					return err
 				}
 			}
+
 			var err error
 			r, err = n.svc.Before(r, w)
 			if err != nil {
+				if err == ErrHalt {
+					return nil
+				}
 				route.OnErr(r, w, err)
 				if a.OnErr != nil {
 					a.OnErr(a, route, r, w, err)
@@ -259,6 +275,9 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 	}
 
 	if err := route.Handle(r, w); err != nil {
+		if err == ErrHalt {
+			return nil
+		}
 		route.OnErr(r, w, err)
 		if a.OnErr != nil {
 			a.OnErr(a, route, r, w, err)
@@ -268,6 +287,9 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 
 	for i := len(nodes) - 1; i >= 0; i-- {
 		if err := nodes[i].svc.After(r, w); err != nil {
+			if err == ErrHalt {
+				return nil
+			}
 			route.OnErr(r, w, err)
 			if a.OnErr != nil {
 				a.OnErr(a, route, r, w, err)
@@ -275,6 +297,7 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -324,6 +347,7 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 			base := r.Clone(r.Context())
 			base = withApp(base, a)
 			base = WithValidated(base, WSConn{Conn: conn})
+
 			writer := newWSWriter(a, conn, base)
 
 			{
@@ -392,20 +416,16 @@ func resolveServices(roots []Service) []serviceNode {
 			panic(fmt.Sprintf("vii: cyclic service dependency detected at %s", id))
 		}
 		visiting[id] = true
-
 		if ws, ok := any(s).(WithServices); ok {
 			for _, dep := range ws.Services() {
 				visit(dep)
 			}
 		}
-
 		var vals []AnyValidator
 		if wv, ok := any(s).(WithValidators); ok {
 			vals = wv.Validators()
 		}
-
 		out = append(out, serviceNode{svc: s, validators: vals})
-
 		visiting[id] = false
 		visited[id] = true
 	}
@@ -413,7 +433,6 @@ func resolveServices(roots []Service) []serviceNode {
 	for _, s := range roots {
 		visit(s)
 	}
-
 	return out
 }
 

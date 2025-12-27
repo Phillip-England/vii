@@ -81,6 +81,7 @@
         <a href="#routes">Routes</a>
         <a href="#validators">Validators</a>
         <a href="#services">Services</a>
+        <a href="#global-services">Global services</a>
         <a href="#context">Context storage</a>
         <a href="#errors">OnErr &amp; OnNotFound</a>
         <a href="#static">Static files</a>
@@ -116,12 +117,12 @@ import (
   vii "github.com/phillip-england/vii/vii"
 )
 
-//go:embed docs/*
 var docs embed.FS
 
 func main() {
   app := vii.New()
 
+  // optional hooks
   app.OnNotFound = func(app *vii.App, r *http.Request, w http.ResponseWriter) {
     _ = app
     http.NotFound(w, r)
@@ -166,8 +167,12 @@ func main() {
           <ul>
             <li><code>Validated[T](r)</code>: retrieve by type.</li>
             <li><code>Valid[T](r, key)</code>: retrieve by key (for multiple instances of the same type).</li>
-            <li>Helpers store values with <code>WithValidated</code>/<code>WithValid</code> (or <code>Provide*</code> helpers).</li>
+            <li>Store values with <code>WithValidated</code>/<code>WithValid</code> (or <code>Provide*</code> helpers).</li>
           </ul>
+          <p class="muted">
+            <strong>Defensive note:</strong> <code>WithValidated</code> / <code>WithValid</code> return <code>nil</code> if <code>r == nil</code>,
+            so service/validator code can be safely written with early nil-guards.
+          </p>
         </div>
       </div>
     </section>
@@ -184,11 +189,11 @@ func main() {
       <h3>Mount a route</h3>
       <pre><code>app := vii.New()
 _ = app.Mount(http.MethodGet, "/", HomeRoute{})
-// or:
 _ = app.MountPattern("GET /", HomeRoute{})</code></pre>
 
       <p class="muted">
-        Routing is exact match: method+path maps to one route. If there’s no route, <code>vii</code> will try static mounts (if configured), otherwise <code>OnNotFound</code>.
+        Routing is exact match: method+path maps to one route. If there’s no route, <code>vii</code> will try static mounts (if configured),
+        otherwise <code>OnNotFound</code>.
       </p>
 
       <h3>A minimal route</h3>
@@ -214,7 +219,6 @@ func (HomeRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
         Validators compute a typed value from the request and either return it or fail.
         The ergonomic pattern is: <strong>define the data you want and a <code>Validate</code> method for it</strong>.
       </p>
-
       <pre><code>type Validator[T any] interface {
   Validate(r *http.Request) (T, error)
 }</code></pre>
@@ -223,6 +227,7 @@ func (HomeRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
       <pre><code>type User struct{ Name string }
 
 type UserVal struct{}
+
 func (UserVal) Validate(r *http.Request) (User, error) {
   name := r.Header.Get("X-User")
   if name == "" {
@@ -260,7 +265,6 @@ func (HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
 
       <h3>Keyed validation (multiple instances of same type)</h3>
       <p>If you need <em>two</em> values of the same type, use a typed key.</p>
-
       <pre><code>kA := vii.NewKey[User]("A")
 kB := vii.NewKey[User]("B")
 
@@ -310,7 +314,6 @@ func (AuthService) Before(r *http.Request, w http.ResponseWriter) (*http.Request
   _ = w
   u, ok := vii.Validated[User](r)
   if !ok { return r, fmt.Errorf("missing user") }
-
   r = vii.WithValidated(r, AuthedUser{Name: u.Name})
   return r, nil
 }
@@ -330,22 +333,56 @@ func (AuthService) After(r *http.Request, w http.ResponseWriter) error {
 
       <h3>Per-instance service identity (ServiceKey)</h3>
       <pre><code>type ServiceKeyer interface { ServiceKey() string }</code></pre>
-
       <p>If you need multiple instances of the same service type, implement <code>ServiceKey()</code> to keep them distinct.</p>
-
       <pre><code>type AuditService struct {
   Name string
-  Key  vii.Key[AuditService]
 }
 
-func (s AuditService) ServiceKey() string { return s.Name }
+func (s AuditService) ServiceKey() string { return s.Name }</code></pre>
+    </section>
 
-func NewAuditService(name string) AuditService {
-  return AuditService{
-    Name: name,
-    Key:  vii.NewKey[AuditService](name),
-  }
-}</code></pre>
+    <section id="global-services">
+      <h2>Global services <span class="pill">app.Use</span></h2>
+      <p>
+        You can install services globally on the app with <code>app.Use(...)</code>.
+        These run for <strong>every mounted route</strong> (HTTP and WS),
+        and they wrap route services.
+      </p>
+
+      <pre><code>app := vii.New()
+
+// Global middleware-like service (logging, CORS, CSRF, rate limit, tracing, etc.)
+app.Use(vii.LoggerService{})</code></pre>
+
+      <div class="callout">
+        <strong>Ordering:</strong> global services run first in <code>Before</code>, then route services.
+        In <code>After</code>, route services unwind first, then global services unwind last.
+      </div>
+
+      <pre><code>// Order example:
+app.Use(GlobalA{}, GlobalB{})
+_ = app.Mount(http.MethodGet, "/x", RouteWithServices{ /* Svc1, Svc2 */ })
+
+// Before order: GlobalA → GlobalB → Svc1 → Svc2 → handler
+// After order:  handler → Svc2 → Svc1 → GlobalB → GlobalA</code></pre>
+
+      <h3>CORS: automatic preflight responses (optional)</h3>
+      <p class="muted">
+        <code>vii.CORSService</code> sets the CORS headers. If you enable <code>AutoPreflight</code>,
+        preflight requests will be answered automatically with <code>204</code> (and the pipeline halts),
+        so you do <strong>not</strong> need to mount an explicit <code>OPTIONS</code> route.
+      </p>
+
+      <pre><code>app.Use(vii.CORSService{
+  Origin:        true,  // reflect request origin (or use "*" / []string / regexp / func)
+  Credentials:   false,
+  AutoPreflight: true,  // reply 204 for allowed preflight
+})</code></pre>
+
+      <p class="muted">
+        If <code>AutoPreflight</code> is false (default), preflight will still receive the correct headers,
+        but routing behaves normally (so you may want to mount an <code>OPTIONS</code> handler if you need a body/status).
+      </p>
     </section>
 
     <section id="context">
@@ -360,6 +397,7 @@ r = vii.WithValidated(r, User{Name: "Jace"})
 // read
 u, ok := vii.Validated[User](r)</code></pre>
         </div>
+
         <div>
           <h3>Store and read by key</h3>
           <pre><code>k := vii.NewKey[User]("primary")
@@ -406,7 +444,7 @@ r = vii.ProvideOnlyKey(r, k, u)</code></pre>
 
 app.OnErr = func(app *vii.App, route vii.Route, r *http.Request, w http.ResponseWriter, err error) {
   _ = app; _ = route; _ = r; _ = w
-  // logging/metrics/etc
+  fmt.Println("global error:", err)
 }</code></pre>
 
       <h3>Not found</h3>
@@ -511,18 +549,17 @@ func (WSEcho) Handle(r *http.Request, w http.ResponseWriter) error {
       <h3>Mounting all four methods on the same path</h3>
       <pre><code>app := vii.New()
 
-_ = app.Mount(vii.Method.OPEN,   "/ws", WSEcho{})
+_ = app.Mount(vii.Method.OPEN,    "/ws", WSEcho{})
 _ = app.Mount(vii.Method.MESSAGE, "/ws", WSEcho{})
-
-_ = app.Mount(vii.Method.DRAIN,  "/ws", WSEcho{}) // optional
-_ = app.Mount(vii.Method.CLOSE,  "/ws", WSEcho{}) // optional</code></pre>
+_ = app.Mount(vii.Method.DRAIN,   "/ws", WSEcho{}) // optional
+_ = app.Mount(vii.Method.CLOSE,   "/ws", WSEcho{}) // optional</code></pre>
 
       <h3>Services &amp; validators work the same on WS</h3>
       <p>WS handlers run through the same pipeline: route validators → service validators → service before → handler → service after.</p>
-
       <pre><code>type WSUser struct{ Name string }
 
 type WSUserVal struct{}
+
 func (WSUserVal) Validate(r *http.Request) (WSUser, error) {
   u := r.Header.Get("X-User")
   if u == "" { return WSUser{}, fmt.Errorf("missing X-User") }
@@ -530,13 +567,16 @@ func (WSUserVal) Validate(r *http.Request) (WSUser, error) {
 }
 
 type WSAuthService struct{}
+
 func (WSAuthService) Validators() []vii.AnyValidator {
   return []vii.AnyValidator{vii.SV(WSUserVal{})}
 }
+
 func (WSAuthService) Before(r *http.Request, w http.ResponseWriter) (*http.Request, error) { return r, nil }
 func (WSAuthService) After(r *http.Request, w http.ResponseWriter) error { return nil }
 
 type WSRoute struct{}
+
 func (WSRoute) Services() []vii.Service { return []vii.Service{WSAuthService{}} }
 func (WSRoute) OnMount(app *vii.App) error { return nil }
 func (WSRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) { _ = r; _ = w; _ = err }
@@ -557,33 +597,38 @@ func (WSRoute) Handle(r *http.Request, w http.ResponseWriter) error {
         Validators are the bridge from raw request → typed data.
       </p>
 
-      <h3>2) Let services own cross-cutting validation</h3>
+      <h3>2) Let services own cross-cutting work</h3>
       <ul>
-        <li>Auth, tracing, audit, rate limiting, feature flags, etc.</li>
+        <li>Auth, CORS, CSRF, tracing, audit, rate limiting, feature flags, etc.</li>
         <li>Services can compute and inject new typed values for routes to use.</li>
       </ul>
 
-      <h3>3) Use keys when you truly need multiple instances</h3>
+      <h3>3) Use global services to make things “just work”</h3>
+      <p class="muted">
+        If something should apply everywhere, prefer <code>app.Use(...)</code> so users pay setup cost once and everything feels smooth afterwards.
+      </p>
+
+      <h3>4) Use keys when you truly need multiple instances</h3>
       <ul>
         <li>Multiple audit services, multiple DB handles, multiple configs of the same type.</li>
         <li>Keyed access avoids type collisions and keeps call sites explicit.</li>
       </ul>
 
-      <h3>4) Keep routes tiny</h3>
+      <h3>5) Keep routes tiny</h3>
       <p class="muted">
         A great route usually reads already-validated data from context, writes a response, and returns.
       </p>
 
-      <h3>5) Treat WS as “methodful routing”</h3>
+      <h3>6) Treat WS as “methodful routing”</h3>
       <p class="muted">
         Your WS endpoint is a path, and the lifecycle phases are methods. Keep each phase focused.
       </p>
     </section>
 
     <section>
-      <h2>Complete example (HTTP + services + validators)</h2>
+      <h2>Complete example (HTTP + global services + route services + validators)</h2>
       <p class="muted">
-        Two audit services (distinct instances), one user validator, and keyed service access.
+        Global CORS + Logger, two audit services (distinct instances), one user validator owned by audit, keyed service access.
       </p>
 
       <pre><code>package main
@@ -598,6 +643,7 @@ import (
 type User struct{ Name string }
 
 type UserVal struct{}
+
 func (UserVal) Validate(r *http.Request) (User, error) {
   name := r.Header.Get("X-User")
   if name == "" {
@@ -629,10 +675,8 @@ func (s AuditService) Validators() []vii.AnyValidator {
 func (s AuditService) Before(r *http.Request, w http.ResponseWriter) (*http.Request, error) {
   _ = w
   r = vii.WithValid(r, s.Key, s) // expose service instance by key
-
   u, _ := vii.Validated[User](r)
   fmt.Println("before:", s.Prefix, u.Name)
-
   return r, nil
 }
 
@@ -676,18 +720,21 @@ func (rt HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
   _, _ = w.Write([]byte("Hello, " + u.Name + "!\n"))
   _, _ = w.Write([]byte(a.Prefix + u.Name + " via audit-A\n"))
   _, _ = w.Write([]byte(b.Prefix + u.Name + " via audit-B\n"))
-
   return nil
 }
 
 func main() {
   app := vii.New()
 
+  // global services
+  app.Use(vii.CORSService{Origin: true, AutoPreflight: true})
+  app.Use(vii.LoggerService{})
+
+  // hooks
   app.OnNotFound = func(app *vii.App, r *http.Request, w http.ResponseWriter) {
     _ = app
     http.NotFound(w, r)
   }
-
   app.OnErr = func(app *vii.App, route vii.Route, r *http.Request, w http.ResponseWriter, err error) {
     _ = app; _ = route; _ = r; _ = w
     fmt.Println("global error:", err)

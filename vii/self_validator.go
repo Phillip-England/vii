@@ -36,8 +36,6 @@ func WrapValidatorKey[T any](k Key[T], v Validator[T]) AnyValidator {
 	})
 }
 
-// WrapValidatorOnlyKey stores ONLY by key (does NOT write into the "by type" slot).
-// Use this when you expect multiple instances of the same type in the request.
 func WrapValidatorOnlyKey[T any](k Key[T], v Validator[T]) AnyValidator {
 	return anyValidatorFunc(func(r *http.Request) (*http.Request, error) {
 		val, err := v.Validate(r)
@@ -113,6 +111,10 @@ func keyString[T any](k Key[T]) string {
 }
 
 func WithValidated[T any](r *http.Request, value T) *http.Request {
+	// Defensive: allow nil requests without panicking.
+	if r == nil {
+		return nil
+	}
 	t := typeOf[T]()
 	old := getStore(r)
 	next := cloneStore(old)
@@ -137,6 +139,10 @@ func Validated[T any](r *http.Request) (T, bool) {
 }
 
 func WithValid[T any](r *http.Request, k Key[T], value T) *http.Request {
+	// Defensive: allow nil requests without panicking.
+	if r == nil {
+		return nil
+	}
 	old := getStore(r)
 	next := cloneStore(old)
 	next.byKey[keyString(k)] = value

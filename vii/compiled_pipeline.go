@@ -15,7 +15,6 @@ func compilePipeline(app *App, route Route) *compiledPipeline {
 		rv = rvs.Validators()
 	}
 
-	// NEW: combine global + route services into one resolved list
 	var roots []Service
 	if app != nil && len(app.services) > 0 {
 		roots = append(roots, app.services...)
@@ -47,6 +46,9 @@ func (p *compiledPipeline) serve(w http.ResponseWriter, r *http.Request) error {
 		var err error
 		r, err = v.ValidateAny(r)
 		if err != nil {
+			if err == ErrHalt {
+				return nil
+			}
 			p.route.OnErr(r, w, err)
 			if p.app != nil && p.app.OnErr != nil {
 				p.app.OnErr(p.app, p.route, r, w, err)
@@ -65,6 +67,9 @@ func (p *compiledPipeline) serve(w http.ResponseWriter, r *http.Request) error {
 			var err error
 			r, err = v.ValidateAny(r)
 			if err != nil {
+				if err == ErrHalt {
+					return nil
+				}
 				p.route.OnErr(r, w, err)
 				if p.app != nil && p.app.OnErr != nil {
 					p.app.OnErr(p.app, p.route, r, w, err)
@@ -76,6 +81,9 @@ func (p *compiledPipeline) serve(w http.ResponseWriter, r *http.Request) error {
 		var err error
 		r, err = n.svc.Before(r, w)
 		if err != nil {
+			if err == ErrHalt {
+				return nil
+			}
 			p.route.OnErr(r, w, err)
 			if p.app != nil && p.app.OnErr != nil {
 				p.app.OnErr(p.app, p.route, r, w, err)
@@ -85,6 +93,9 @@ func (p *compiledPipeline) serve(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	if err := p.route.Handle(r, w); err != nil {
+		if err == ErrHalt {
+			return nil
+		}
 		p.route.OnErr(r, w, err)
 		if p.app != nil && p.app.OnErr != nil {
 			p.app.OnErr(p.app, p.route, r, w, err)
@@ -94,6 +105,9 @@ func (p *compiledPipeline) serve(w http.ResponseWriter, r *http.Request) error {
 
 	for i := len(p.nodes) - 1; i >= 0; i-- {
 		if err := p.nodes[i].svc.After(r, w); err != nil {
+			if err == ErrHalt {
+				return nil
+			}
 			p.route.OnErr(r, w, err)
 			if p.app != nil && p.app.OnErr != nil {
 				p.app.OnErr(p.app, p.route, r, w, err)

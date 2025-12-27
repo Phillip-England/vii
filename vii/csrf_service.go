@@ -10,18 +10,12 @@ import (
 	"time"
 )
 
-// CSRFKey allows retrieving the CSRF token by key:
-//
-//	tok, ok := vii.Valid(r, vii.CSRFKey)
 var CSRFKey = NewKey[CSRFToken]("csrf")
 
-// CSRFToken is the per-request token (copied from cookie and/or request).
 type CSRFToken struct {
 	Value string
 }
 
-// CSRFMetrics is optional instrumentation.
-// The default is no-op; plug in Prometheus/OpenTelemetry/etc by implementing these hooks.
 type CSRFMetrics interface {
 	Generated()
 	Validated()
@@ -29,7 +23,6 @@ type CSRFMetrics interface {
 	Skipped(reason string)
 }
 
-// noop metrics (default)
 type csrfNoopMetrics struct{}
 
 func (csrfNoopMetrics) Generated()                {}
@@ -40,42 +33,28 @@ func (csrfNoopMetrics) String() string            { return "noop" }
 func (csrfNoopMetrics) Observe(_ time.Duration)   {} // reserved if you want to extend later
 func (csrfNoopMetrics) Observe2(_ string, _ int64) {} // reserved
 
-// CSRFService provides CSRF protection using the double-submit cookie pattern.
-// Safe methods ensure a cookie exists; unsafe methods require the client echo
-// the cookie value via header or form field.
 type CSRFService struct {
-	// CookieName defaults to "csrf".
 	CookieName string
-
-	// HeaderName defaults to "X-CSRF-Token".
 	HeaderName string
+	FormField  string
 
-	// FormField defaults to "csrf_token".
-	FormField string
-
-	// ProtectMethods defaults to POST, PUT, PATCH, DELETE.
 	ProtectMethods []string
 
-	// CookiePath defaults to "/".
 	CookiePath string
+	SameSite   http.SameSite
+	Secure     *bool
 
-	// SameSite defaults to Lax.
-	SameSite http.SameSite
-
-	// Secure, if nil, defaults to (r.TLS != nil).
-	Secure *bool
-
-	// HttpOnly defaults to false (so JS can read cookie if you choose header-based clients).
+	// HttpOnly is kept for backward compatibility, but cannot distinguish
+	// "unset" vs "explicit false". Prefer CookieHttpOnly if you need false.
 	HttpOnly bool
 
-	// MaxAgeSeconds defaults to 0 (session cookie).
+	// CookieHttpOnly overrides HttpOnly behavior when non-nil.
+	// Default when nil is true (safer by default).
+	CookieHttpOnly *bool
+
 	MaxAgeSeconds int
 
-	// Skip can bypass CSRF enforcement for certain requests (e.g. webhook endpoints).
-	// Return true to skip.
-	Skip func(r *http.Request) (bool, string)
-
-	// Metrics defaults to no-op.
+	Skip    func(r *http.Request) (bool, string)
 	Metrics CSRFMetrics
 }
 
@@ -88,7 +67,6 @@ func (s CSRFService) Before(r *http.Request, w http.ResponseWriter) (*http.Reque
 	if r == nil || w == nil {
 		return r, nil
 	}
-
 	cfg := s.withDefaults(r)
 
 	if cfg.Skip != nil {
@@ -98,7 +76,6 @@ func (s CSRFService) Before(r *http.Request, w http.ResponseWriter) (*http.Reque
 		}
 	}
 
-	// Always try to ensure a cookie exists on "safe" methods.
 	if isSafeMethod(r.Method) {
 		cTok, ok := readCSRFCookie(r, cfg.CookieName)
 		if !ok || cTok == "" {
@@ -112,15 +89,11 @@ func (s CSRFService) Before(r *http.Request, w http.ResponseWriter) (*http.Reque
 			r = ProvideKey(r, CSRFKey, CSRFToken{Value: newTok})
 			return r, nil
 		}
-
-		// Make token available to handlers.
 		r = ProvideKey(r, CSRFKey, CSRFToken{Value: cTok})
 		return r, nil
 	}
 
-	// Unsafe methods: enforce.
 	if !methodIn(r.Method, cfg.ProtectMethods) {
-		// Not protected, but still expose token if present.
 		if cTok, ok := readCSRFCookie(r, cfg.CookieName); ok && cTok != "" {
 			r = ProvideKey(r, CSRFKey, CSRFToken{Value: cTok})
 		}
@@ -145,7 +118,6 @@ func (s CSRFService) Before(r *http.Request, w http.ResponseWriter) (*http.Reque
 		return r, ErrCSRFTokenMismatch
 	}
 
-	// Success; expose token to handlers.
 	cfg.Metrics.Validated()
 	r = ProvideKey(r, CSRFKey, CSRFToken{Value: cTok})
 	return r, nil
@@ -181,13 +153,16 @@ func (s CSRFService) withDefaults(r *http.Request) CSRFService {
 	if out.Metrics == nil {
 		out.Metrics = csrfNoopMetrics{}
 	}
-	// HttpOnly default is false (zero value) -> keep as-is.
-	// MaxAgeSeconds default is 0 -> keep as-is.
-
-	// Secure default: true only if TLS is present.
 	if out.Secure == nil {
 		sec := (r.TLS != nil)
 		out.Secure = &sec
+	}
+
+	// Default HttpOnly to true unless explicitly overridden via CookieHttpOnly.
+	// (HttpOnly bool can't represent "unset" vs "false", so CookieHttpOnly exists for opt-out.)
+	if out.CookieHttpOnly == nil {
+		def := true
+		out.CookieHttpOnly = &def
 	}
 
 	return out
@@ -225,27 +200,32 @@ func writeCSRFCookie(w http.ResponseWriter, r *http.Request, cfg CSRFService, to
 		secure = *cfg.Secure
 	}
 
+	httpOnly := true
+	if cfg.CookieHttpOnly != nil {
+		httpOnly = *cfg.CookieHttpOnly
+	} else if cfg.HttpOnly {
+		// legacy compatibility: if someone set HttpOnly:true historically
+		httpOnly = true
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     cfg.CookieName,
 		Value:    tok,
 		Path:     cfg.CookiePath,
 		MaxAge:   cfg.MaxAgeSeconds,
 		Secure:   secure,
-		HttpOnly: cfg.HttpOnly,
+		HttpOnly: httpOnly,
 		SameSite: cfg.SameSite,
 	})
 }
 
 func readCSRFRequestToken(r *http.Request, headerName, formField string) string {
-	// Prefer header.
 	if headerName != "" {
 		if v := strings.TrimSpace(r.Header.Get(headerName)); v != "" {
 			return v
 		}
 	}
-	// Fallback to form field.
 	if formField != "" {
-		// Ignore parse errors; if body isn't form-encoded this will no-op.
 		_ = r.ParseForm()
 		if v := strings.TrimSpace(r.FormValue(formField)); v != "" {
 			return v
@@ -255,7 +235,6 @@ func readCSRFRequestToken(r *http.Request, headerName, formField string) string 
 }
 
 func newCSRFToken() (string, error) {
-	// 32 bytes -> 43 chars base64url (no padding).
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -264,9 +243,7 @@ func newCSRFToken() (string, error) {
 }
 
 func secureEqual(a, b string) bool {
-	// Constant-time compare over bytes; also constant-time length check behavior.
 	if len(a) != len(b) {
-		// Compare anyway to avoid early exit timing patterns.
 		min := len(a)
 		if len(b) < min {
 			min = len(b)
