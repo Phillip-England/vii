@@ -2,11 +2,13 @@ package vii
 
 import (
 	"fmt"
+	"html/template"
 	"io/fs"
 	"net/http"
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/websocket"
 )
@@ -17,16 +19,20 @@ type App struct {
 	embedded map[string]fs.FS
 	services []Service // NEW: global services
 
+	tmplMu    sync.RWMutex
+	templates map[string]*template.Template
+
 	OnErr      func(app *App, route Route, r *http.Request, w http.ResponseWriter, err error)
 	OnNotFound func(app *App, r *http.Request, w http.ResponseWriter)
 }
 
 func New() *App {
 	return &App{
-		mux:      make(map[string]*http.ServeMux),
-		static:   nil,
-		embedded: make(map[string]fs.FS),
-		services: nil,
+		mux:       make(map[string]*http.ServeMux),
+		static:    nil,
+		embedded:  make(map[string]fs.FS),
+		services:  nil,
+		templates: make(map[string]*template.Template),
 		OnErr: func(app *App, route Route, r *http.Request, w http.ResponseWriter, err error) {
 			_ = app
 			_ = route
@@ -56,24 +62,24 @@ func (a *App) Mount(method, path string, route Route) error {
 	if a.embedded == nil {
 		a.embedded = make(map[string]fs.FS)
 	}
+	if a.templates == nil {
+		a.templates = make(map[string]*template.Template)
+	}
 	if path == "" {
 		return fmt.Errorf("vii: mount path is empty")
 	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-
 	m := a.getMux(method)
 	mh := &mountedHandler{
 		app:   a,
 		route: route,
 	}
 	m.Handle(path, mh)
-
 	if err := route.OnMount(a); err != nil {
 		return err
 	}
-
 	mh.pipe = compilePipeline(a, route) // includes global services now
 	return nil
 }
@@ -103,6 +109,12 @@ type serviceNode struct {
 
 func (h *mountedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a := h.app
+
+	// IMPORTANT: http.NotFound assumes r != nil; match App.ServeHTTP behavior.
+	if r == nil {
+		http.NotFound(w, &http.Request{})
+		return
+	}
 	if a == nil || h.route == nil {
 		http.NotFound(w, r)
 		return
@@ -112,21 +124,22 @@ func (h *mountedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveWebSocket(w, r)
 		return
 	}
-
 	if h.pipe != nil {
 		_ = h.pipe.serve(w, r)
 		return
 	}
-
 	_ = a.serveFor(h.route, w, r)
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if a != nil && r != nil && r.Method == http.MethodGet && isWebSocketUpgrade(r) && a.hasAnyWSMatch(r) {
+	if r == nil {
+		http.NotFound(w, &http.Request{})
+		return
+	}
+	if a != nil && r.Method == http.MethodGet && isWebSocketUpgrade(r) && a.hasAnyWSMatch(r) {
 		a.serveWebSocket(w, r)
 		return
 	}
-
 	if a != nil && a.mux != nil {
 		if m := a.mux[r.Method]; m != nil {
 			h, pat := m.Handler(r)
@@ -136,11 +149,9 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-
 	if a.tryStatic(w, r) {
 		return
 	}
-
 	if a.OnNotFound != nil {
 		a.OnNotFound(a, r, w)
 		return
@@ -207,7 +218,6 @@ func (a *App) embeddedDir(key string) (fs.FS, bool) {
 
 func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) error {
 	r = withApp(r, a)
-
 	if rv, ok := route.(WithValidators); ok {
 		for _, v := range rv.Validators() {
 			if v == nil {
@@ -227,7 +237,6 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 			}
 		}
 	}
-
 	var roots []Service
 	if a != nil && len(a.services) > 0 {
 		roots = append(roots, a.services...)
@@ -235,7 +244,6 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 	if rs, ok := route.(WithServices); ok {
 		roots = append(roots, rs.Services()...)
 	}
-
 	var nodes []serviceNode
 	if len(roots) > 0 {
 		nodes = resolveServices(roots)
@@ -258,7 +266,6 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 					return err
 				}
 			}
-
 			var err error
 			r, err = n.svc.Before(r, w)
 			if err != nil {
@@ -273,7 +280,6 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 			}
 		}
 	}
-
 	if err := route.Handle(r, w); err != nil {
 		if err == ErrHalt {
 			return nil
@@ -284,7 +290,6 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 		}
 		return err
 	}
-
 	for i := len(nodes) - 1; i >= 0; i-- {
 		if err := nodes[i].svc.After(r, w); err != nil {
 			if err == ErrHalt {
@@ -297,25 +302,32 @@ func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) erro
 			return err
 		}
 	}
-
 	return nil
 }
 
 func (a *App) dispatchWS(phase string, w http.ResponseWriter, r *http.Request) {
-	if a.mux != nil {
-		if m := a.mux[phase]; m != nil {
-			_, pat := m.Handler(r)
-			if pat != "" {
-				m.ServeHTTP(w, r)
-				return
-			}
+	if a == nil || a.mux == nil || r == nil {
+		return
+	}
+
+	// First: explicit WS phase handlers
+	if m := a.mux[phase]; m != nil {
+		_, pat := m.Handler(r)
+		if pat != "" {
+			m.ServeHTTP(w, r)
+			return
 		}
 	}
+
+	// Optional fallback: allow GET-mounted handlers to act as OPEN/MESSAGE handlers,
+	// but make it *actually* a GET request when we dispatch.
 	if phase == Method.OPEN || phase == Method.MESSAGE {
 		if m := a.mux[http.MethodGet]; m != nil {
 			_, pat := m.Handler(r)
 			if pat != "" {
-				m.ServeHTTP(w, r)
+				req := r.Clone(r.Context())
+				req.Method = http.MethodGet
+				m.ServeHTTP(w, req)
 				return
 			}
 		}
@@ -334,10 +346,7 @@ func (a *App) hasAnyWSMatch(r *http.Request) bool {
 			}
 		}
 	}
-	if m := a.mux[http.MethodGet]; m != nil {
-		_, pat := m.Handler(r)
-		return pat != ""
-	}
+	// IMPORTANT: do NOT treat plain GET routes as WS matches.
 	return false
 }
 
@@ -347,15 +356,12 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 			base := r.Clone(r.Context())
 			base = withApp(base, a)
 			base = WithValidated(base, WSConn{Conn: conn})
-
 			writer := newWSWriter(a, conn, base)
-
 			{
 				req := base.Clone(base.Context())
 				req.Method = Method.OPEN
 				a.dispatchWS(Method.OPEN, writer, req)
 			}
-
 			var closeErr error
 			for {
 				var msg []byte
@@ -368,7 +374,6 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 				req = WithValidated(req, WSMessage{Data: msg})
 				a.dispatchWS(Method.MESSAGE, writer, req)
 			}
-
 			{
 				req := base.Clone(base.Context())
 				req.Method = Method.CLOSE
@@ -382,7 +387,6 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 
 func resolveServices(roots []Service) []serviceNode {
 	var out []serviceNode
-
 	serviceID := func(s Service) string {
 		if s == nil {
 			return ""
@@ -399,10 +403,8 @@ func resolveServices(roots []Service) []serviceNode {
 		}
 		return id
 	}
-
 	visiting := map[string]bool{}
 	visited := map[string]bool{}
-
 	var visit func(s Service)
 	visit = func(s Service) {
 		if s == nil {
@@ -429,7 +431,6 @@ func resolveServices(roots []Service) []serviceNode {
 		visiting[id] = false
 		visited[id] = true
 	}
-
 	for _, s := range roots {
 		visit(s)
 	}

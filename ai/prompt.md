@@ -1,10 +1,7 @@
 ---
-$at("vii")
-$at("vii_test")
-$skill("rpp")
+$at("*")
 $skill("ergo")
-$skill("modular")
+$sh("make test")
 ---
 
-
-how can i allow users to import vii using /vii instead of /vii/vii
+Okay we are still having some issues please help that would be so awesome. Thank you so much!

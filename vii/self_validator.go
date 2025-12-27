@@ -111,7 +111,6 @@ func keyString[T any](k Key[T]) string {
 }
 
 func WithValidated[T any](r *http.Request, value T) *http.Request {
-	// Defensive: allow nil requests without panicking.
 	if r == nil {
 		return nil
 	}
@@ -139,7 +138,6 @@ func Validated[T any](r *http.Request) (T, bool) {
 }
 
 func WithValid[T any](r *http.Request, k Key[T], value T) *http.Request {
-	// Defensive: allow nil requests without panicking.
 	if r == nil {
 		return nil
 	}
@@ -164,14 +162,6 @@ func Valid[T any](r *http.Request, k Key[T]) (T, bool) {
 	return out, true
 }
 
-func V[T any](k Key[T], v Validator[T]) AnyValidator {
-	return WrapValidatorKey(k, v)
-}
-
-func KV[T any](k Key[T], v Validator[T]) AnyValidator {
-	return WrapValidatorOnlyKey(k, v)
-}
-
-func SV[T any](v Validator[T]) AnyValidator {
-	return WrapValidator(v)
-}
+func V[T any](k Key[T], v Validator[T]) AnyValidator  { return WrapValidatorKey(k, v) }
+func KV[T any](k Key[T], v Validator[T]) AnyValidator { return WrapValidatorOnlyKey(k, v) }
+func SV[T any](v Validator[T]) AnyValidator           { return WrapValidator(v) }
