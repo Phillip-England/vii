@@ -5,4 +5,4 @@ dev:
 	go run main.go
 
 docs:
-	bun ./www/html/**/*.html
+	bun ./www/**/*.html

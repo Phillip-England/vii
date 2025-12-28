@@ -14,14 +14,12 @@ import (
 )
 
 type App struct {
-	mux      map[string]*http.ServeMux
-	static   []staticMount
-	embedded map[string]fs.FS
-	services []Service // NEW: global services
-
-	tmplMu    sync.RWMutex
-	templates map[string]*template.Template
-
+	mux        map[string]*http.ServeMux
+	static     []staticMount
+	embedded   map[string]fs.FS
+	services   []Service // NEW: global services
+	tmplMu     sync.RWMutex
+	templates  map[string]*template.Template
 	OnErr      func(app *App, route Route, r *http.Request, w http.ResponseWriter, err error)
 	OnNotFound func(app *App, r *http.Request, w http.ResponseWriter)
 }
@@ -65,21 +63,26 @@ func (a *App) Mount(method, path string, route Route) error {
 	if a.templates == nil {
 		a.templates = make(map[string]*template.Template)
 	}
+
 	if path == "" {
 		return fmt.Errorf("vii: mount path is empty")
 	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
+
 	m := a.getMux(method)
+
 	mh := &mountedHandler{
 		app:   a,
 		route: route,
 	}
 	m.Handle(path, mh)
+
 	if err := route.OnMount(a); err != nil {
 		return err
 	}
+
 	mh.pipe = compilePipeline(a, route) // includes global services now
 	return nil
 }
@@ -109,8 +112,6 @@ type serviceNode struct {
 
 func (h *mountedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a := h.app
-
-	// IMPORTANT: http.NotFound assumes r != nil; match App.ServeHTTP behavior.
 	if r == nil {
 		http.NotFound(w, &http.Request{})
 		return
@@ -120,15 +121,21 @@ func (h *mountedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. WebSocket Upgrade Check
 	if r.Method == http.MethodGet && isWebSocketUpgrade(r) && a.hasAnyWSMatch(r) {
 		a.serveWebSocket(w, r)
 		return
 	}
+
+	// 2. Serve via Compiled Pipeline
+	// We rely on Mount() to always create the pipe.
 	if h.pipe != nil {
 		_ = h.pipe.serve(w, r)
 		return
 	}
-	_ = a.serveFor(h.route, w, r)
+
+	// If pipe is missing, something is wrong with Mount logic, but we fallback safely
+	http.Error(w, "vii: pipeline not compiled", http.StatusInternalServerError)
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -136,10 +143,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, &http.Request{})
 		return
 	}
+
+	// 1. WebSocket Upgrade Check (Global entry)
 	if a != nil && r.Method == http.MethodGet && isWebSocketUpgrade(r) && a.hasAnyWSMatch(r) {
 		a.serveWebSocket(w, r)
 		return
 	}
+
+	// 2. Mux Match
 	if a != nil && a.mux != nil {
 		if m := a.mux[r.Method]; m != nil {
 			h, pat := m.Handler(r)
@@ -149,13 +160,18 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// 3. Static Files
 	if a.tryStatic(w, r) {
 		return
 	}
+
+	// 4. Not Found Hook
 	if a.OnNotFound != nil {
 		a.OnNotFound(a, r, w)
 		return
 	}
+
 	http.NotFound(w, r)
 }
 
@@ -172,6 +188,7 @@ func (a *App) ServeEmbeddedFiles(prefix string, f fs.FS) error {
 	if f == nil {
 		return fmt.Errorf("vii: embedded fs is nil")
 	}
+
 	h := http.StripPrefix(prefix, http.FileServer(http.FS(f)))
 	a.static = append(a.static, staticMount{
 		prefix:  prefix,
@@ -216,101 +233,10 @@ func (a *App) embeddedDir(key string) (fs.FS, bool) {
 	return f, ok
 }
 
-func (a *App) serveFor(route Route, w http.ResponseWriter, r *http.Request) error {
-	r = withApp(r, a)
-	if rv, ok := route.(WithValidators); ok {
-		for _, v := range rv.Validators() {
-			if v == nil {
-				continue
-			}
-			var err error
-			r, err = v.ValidateAny(r)
-			if err != nil {
-				if err == ErrHalt {
-					return nil
-				}
-				route.OnErr(r, w, err)
-				if a.OnErr != nil {
-					a.OnErr(a, route, r, w, err)
-				}
-				return err
-			}
-		}
-	}
-	var roots []Service
-	if a != nil && len(a.services) > 0 {
-		roots = append(roots, a.services...)
-	}
-	if rs, ok := route.(WithServices); ok {
-		roots = append(roots, rs.Services()...)
-	}
-	var nodes []serviceNode
-	if len(roots) > 0 {
-		nodes = resolveServices(roots)
-		for i := range nodes {
-			n := nodes[i]
-			for _, v := range n.validators {
-				if v == nil {
-					continue
-				}
-				var err error
-				r, err = v.ValidateAny(r)
-				if err != nil {
-					if err == ErrHalt {
-						return nil
-					}
-					route.OnErr(r, w, err)
-					if a.OnErr != nil {
-						a.OnErr(a, route, r, w, err)
-					}
-					return err
-				}
-			}
-			var err error
-			r, err = n.svc.Before(r, w)
-			if err != nil {
-				if err == ErrHalt {
-					return nil
-				}
-				route.OnErr(r, w, err)
-				if a.OnErr != nil {
-					a.OnErr(a, route, r, w, err)
-				}
-				return err
-			}
-		}
-	}
-	if err := route.Handle(r, w); err != nil {
-		if err == ErrHalt {
-			return nil
-		}
-		route.OnErr(r, w, err)
-		if a.OnErr != nil {
-			a.OnErr(a, route, r, w, err)
-		}
-		return err
-	}
-	for i := len(nodes) - 1; i >= 0; i-- {
-		if err := nodes[i].svc.After(r, w); err != nil {
-			if err == ErrHalt {
-				return nil
-			}
-			route.OnErr(r, w, err)
-			if a.OnErr != nil {
-				a.OnErr(a, route, r, w, err)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
 func (a *App) dispatchWS(phase string, w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.mux == nil || r == nil {
 		return
 	}
-
-	// First: explicit WS phase handlers
 	if m := a.mux[phase]; m != nil {
 		_, pat := m.Handler(r)
 		if pat != "" {
@@ -318,9 +244,8 @@ func (a *App) dispatchWS(phase string, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	// Optional fallback: allow GET-mounted handlers to act as OPEN/MESSAGE handlers,
-	// but make it *actually* a GET request when we dispatch.
+	// Fallback to GET handler if OPEN/MESSAGE not explicitly mounted?
+	// This logic allows mounting a single struct on GET /path and having it handle WS phases via switch.
 	if phase == Method.OPEN || phase == Method.MESSAGE {
 		if m := a.mux[http.MethodGet]; m != nil {
 			_, pat := m.Handler(r)
@@ -338,6 +263,7 @@ func (a *App) hasAnyWSMatch(r *http.Request) bool {
 	if a == nil || a.mux == nil || r == nil {
 		return false
 	}
+	// Check if any WS lifecycle method is registered for this path
 	for _, phase := range []string{Method.OPEN, Method.MESSAGE, Method.DRAIN, Method.CLOSE} {
 		if m := a.mux[phase]; m != nil {
 			_, pat := m.Handler(r)
@@ -346,7 +272,6 @@ func (a *App) hasAnyWSMatch(r *http.Request) bool {
 			}
 		}
 	}
-	// IMPORTANT: do NOT treat plain GET routes as WS matches.
 	return false
 }
 
@@ -357,11 +282,15 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 			base = withApp(base, a)
 			base = WithValidated(base, WSConn{Conn: conn})
 			writer := newWSWriter(a, conn, base)
+
+			// OPEN
 			{
 				req := base.Clone(base.Context())
 				req.Method = Method.OPEN
 				a.dispatchWS(Method.OPEN, writer, req)
 			}
+
+			// LOOP
 			var closeErr error
 			for {
 				var msg []byte
@@ -374,6 +303,8 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 				req = WithValidated(req, WSMessage{Data: msg})
 				a.dispatchWS(Method.MESSAGE, writer, req)
 			}
+
+			// CLOSE
 			{
 				req := base.Clone(base.Context())
 				req.Method = Method.CLOSE
@@ -387,6 +318,7 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 
 func resolveServices(roots []Service) []serviceNode {
 	var out []serviceNode
+
 	serviceID := func(s Service) string {
 		if s == nil {
 			return ""
@@ -403,8 +335,10 @@ func resolveServices(roots []Service) []serviceNode {
 		}
 		return id
 	}
+
 	visiting := map[string]bool{}
 	visited := map[string]bool{}
+
 	var visit func(s Service)
 	visit = func(s Service) {
 		if s == nil {
@@ -418,22 +352,27 @@ func resolveServices(roots []Service) []serviceNode {
 			panic(fmt.Sprintf("vii: cyclic service dependency detected at %s", id))
 		}
 		visiting[id] = true
+
 		if ws, ok := any(s).(WithServices); ok {
 			for _, dep := range ws.Services() {
 				visit(dep)
 			}
 		}
+
 		var vals []AnyValidator
 		if wv, ok := any(s).(WithValidators); ok {
 			vals = wv.Validators()
 		}
+
 		out = append(out, serviceNode{svc: s, validators: vals})
 		visiting[id] = false
 		visited[id] = true
 	}
+
 	for _, s := range roots {
 		visit(s)
 	}
+
 	return out
 }
 

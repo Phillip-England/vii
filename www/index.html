@@ -19,6 +19,7 @@
       border-bottom:1px solid var(--border);
       background:rgba(17,24,39,.55);
       backdrop-filter: blur(8px);
+      position: sticky; top: 0;
     }
     .wrap{max-width:980px; margin:0 auto; padding:24px}
     h1{margin:0 0 6px 0; font-size:28px; letter-spacing:.2px}
@@ -30,6 +31,7 @@
       text-decoration:none; color:var(--text);
       padding:6px 10px; border:1px solid var(--border);
       border-radius:999px; background:rgba(15,23,42,.35);
+      font-size: 13px;
     }
     nav a:hover{border-color:var(--accent); color:var(--accent)}
     main{padding:24px}
@@ -39,7 +41,7 @@
       padding:18px 18px; margin:16px 0;
     }
     h2{margin:0 0 10px; font-size:20px}
-    h3{margin:16px 0 8px; font-size:16px; color:var(--accent2)}
+    h3{margin:24px 0 8px; font-size:16px; color:var(--accent2)}
     p{margin:10px 0; color:var(--text)}
     ul{margin:8px 0 0 20px; color:var(--text)}
     code, pre{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
@@ -64,6 +66,7 @@
       display:inline-block; padding:2px 8px; border-radius:999px;
       border:1px solid var(--border); color:var(--muted); font-size:12px;
       margin-left:8px;
+      vertical-align: middle;
     }
     footer{padding:26px 24px; color:var(--muted); border-top:1px solid var(--border)}
     a{color:var(--accent)}
@@ -76,682 +79,294 @@
       <p class="subtitle">Minimal servers in Go — ergonomic routes, validators, services, websockets, and static/embedded assets.</p>
       <nav>
         <a href="#install">Install</a>
+        <a href="#cli">CLI</a>
         <a href="#quickstart">Quickstart</a>
         <a href="#mental-model">Mental model</a>
         <a href="#routes">Routes</a>
         <a href="#validators">Validators</a>
         <a href="#services">Services</a>
-        <a href="#global-services">Global services</a>
-        <a href="#context">Context storage</a>
-        <a href="#errors">OnErr &amp; OnNotFound</a>
-        <a href="#static">Static files</a>
-        <a href="#embedded">Embedded FS registry</a>
+        <a href="#builtins">Built-ins</a>
+        <a href="#templates">Templates</a>
+        <a href="#context">Context</a>
+        <a href="#errors">Errors</a>
         <a href="#ws">WebSockets</a>
-        <a href="#patterns">Patterns</a>
       </nav>
     </div>
   </header>
 
   <main class="wrap">
+    
     <section id="install">
       <h2>Install</h2>
-      <pre><code>go get github.com/phillip-england/vii</code></pre>
-      <p class="muted">Import path for the package in this repository is:</p>
+      <pre><code>go get github.com/phillip-england/vii@latest</code></pre>
+      <p class="muted">Import path:</p>
       <pre><code>import vii "github.com/phillip-england/vii/vii"</code></pre>
+    </section>
+
+    <section id="cli">
+      <h2>CLI Tool <span class="pill">Scaffolding</span></h2>
+      <p>vii comes with a CLI to generate your project structure and reduce boilerplate.</p>
+      <div class="grid">
+        <div>
+          <h3>1. Build the tool</h3>
+          <pre><code># Inside the repo
+go build -o vii main.go
+# Move to path
+mv vii /usr/local/bin/</code></pre>
+        </div>
+        <div>
+          <h3>2. Usage</h3>
+          <pre><code># Create new project
+vii init my-app github.com/me/my-app
+
+# Generate components
+vii route auth_login
+vii service auth
+vii validator user_creds</code></pre>
+        </div>
+      </div>
     </section>
 
     <section id="quickstart">
       <h2>Quickstart</h2>
-      <p class="muted">
-        This is the minimal “serve docs” setup used by this repo’s <code>main.go</code>:
-        mount nothing, embed <code>./docs</code>, serve it at <code>/</code>.
-      </p>
+      <p class="muted">A minimal server that serves embedded files.</p>
       <pre><code>package main
-
 import (
   "embed"
   "io/fs"
   "log"
   "net/http"
-
   vii "github.com/phillip-england/vii/vii"
 )
 
-var docs embed.FS
+//go:embed static/*
+var assets embed.FS
 
 func main() {
   app := vii.New()
+  
+  // 1. Static Files
+  static, _ := fs.Sub(assets, "static")
+  app.ServeEmbeddedFiles("/", static)
 
-  // optional hooks
-  app.OnNotFound = func(app *vii.App, r *http.Request, w http.ResponseWriter) {
-    _ = app
-    http.NotFound(w, r)
-  }
+  // 2. Global Middleware
+  app.Use(vii.LoggerService{})
 
-  sub, err := fs.Sub(docs, "docs")
-  if err != nil {
-    log.Fatalf("fs.Sub(docs, \"docs\"): %v", err)
-  }
-  if err := app.ServeEmbeddedFiles("/", sub); err != nil {
-    log.Fatalf("ServeEmbeddedFiles: %v", err)
-  }
-
-  log.Println("Serving embedded docs on http://localhost:8080 (from ./docs)")
-  log.Fatal(http.ListenAndServe(":8080", app))
+  log.Println("Listening on :8080")
+  http.ListenAndServe(":8080", app)
 }</code></pre>
-
-      <div class="callout">
-        <strong>Rule:</strong> exact <em>route</em> matches win first. Static files are only attempted when there’s no exact route for that method+path.
-      </div>
     </section>
 
     <section id="mental-model">
       <h2>Mental model</h2>
       <div class="callout">
-        <strong>Think:</strong> request flows through
-        <em>route validators</em> → <em>service validators</em> → <em>service before</em> →
-        <em>route handler</em> → <em>service after (reverse order)</em>.
+        <strong>Flow:</strong> Request &rarr; Route Validators &rarr; Service Validators &rarr; Service Before &rarr; <strong>Handler</strong> &rarr; Service After.
       </div>
-
       <div class="grid">
         <div>
-          <h3>Three building blocks</h3>
+          <h3>Three primitives</h3>
           <ul>
-            <li><strong>Routes</strong> decide what happens for a method+path.</li>
-            <li><strong>Validators</strong> compute typed data from the request (and can fail fast).</li>
-            <li><strong>Services</strong> run <code>Before</code>/<code>After</code> around the route and can own validators.</li>
+            <li><strong>Routes:</strong> Define endpoints. They are structs, not functions.</li>
+            <li><strong>Validators:</strong> Turn raw requests into typed structs.</li>
+            <li><strong>Services:</strong> Middleware with a lifecycle (Before/After) and dependencies.</li>
           </ul>
         </div>
         <div>
-          <h3>Data lives in request context</h3>
+          <h3>Type-safe Context</h3>
           <ul>
-            <li><code>Validated[T](r)</code>: retrieve by type.</li>
-            <li><code>Valid[T](r, key)</code>: retrieve by key (for multiple instances of the same type).</li>
-            <li>Store values with <code>WithValidated</code>/<code>WithValid</code> (or <code>Provide*</code> helpers).</li>
+            <li><code>vii.Validated[T](r)</code>: Get data by type.</li>
+            <li><code>vii.Valid[T](r, key)</code>: Get data by key.</li>
+            <li>No more stringly-typed context maps.</li>
           </ul>
-          <p class="muted">
-            <strong>Defensive note:</strong> <code>WithValidated</code> / <code>WithValid</code> return <code>nil</code> if <code>r == nil</code>,
-            so service/validator code can be safely written with early nil-guards.
-          </p>
         </div>
       </div>
     </section>
 
     <section id="routes">
       <h2>Routes <span class="pill">HTTP</span></h2>
-      <p>A route is anything implementing:</p>
+      <p>A route is a struct that implements the <code>Route</code> interface.</p>
       <pre><code>type Route interface {
   Handle(r *http.Request, w http.ResponseWriter) error
   OnMount(app *vii.App) error
   OnErr(r *http.Request, w http.ResponseWriter, err error)
 }</code></pre>
-
-      <h3>Mount a route</h3>
-      <pre><code>app := vii.New()
-_ = app.Mount(http.MethodGet, "/", HomeRoute{})
-_ = app.MountPattern("GET /", HomeRoute{})</code></pre>
-
-      <p class="muted">
-        Routing is exact match: method+path maps to one route. If there’s no route, <code>vii</code> will try static mounts (if configured),
-        otherwise <code>OnNotFound</code>.
-      </p>
-
-      <h3>A minimal route</h3>
-      <pre><code>type HomeRoute struct{}
-
-func (HomeRoute) OnMount(app *vii.App) error { return nil }
-
-func (HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
-  w.WriteHeader(http.StatusOK)
-  _, _ = w.Write([]byte("hello"))
-  return nil
-}
-
-func (HomeRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
-  _ = r
-  http.Error(w, err.Error(), http.StatusInternalServerError)
-}</code></pre>
+      <h3>Mounting</h3>
+      <pre><code>app.Mount(http.MethodGet, "/users", UserRoute{})
+app.MountPattern("POST /users", CreateUserRoute{})</code></pre>
     </section>
 
     <section id="validators">
-      <h2>Validators <span class="pill">HTTP + WS</span></h2>
-      <p>
-        Validators compute a typed value from the request and either return it or fail.
-        The ergonomic pattern is: <strong>define the data you want and a <code>Validate</code> method for it</strong>.
-      </p>
-      <pre><code>type Validator[T any] interface {
-  Validate(r *http.Request) (T, error)
+      <h2>Validators <span class="pill">Input</span></h2>
+      <p>Don't validate in your handler. Validate before you handle.</p>
+      <pre><code>type UserID struct { ID string }
+
+type IDValidator struct{}
+
+func (IDValidator) Validate(r *http.Request) (UserID, error) {
+    id := r.URL.Query().Get("id")
+    if id == "" { return UserID{}, fmt.Errorf("missing id") }
+    return UserID{ID: id}, nil
 }</code></pre>
-
-      <h3>Example: validate a user from headers</h3>
-      <pre><code>type User struct{ Name string }
-
-type UserVal struct{}
-
-func (UserVal) Validate(r *http.Request) (User, error) {
-  name := r.Header.Get("X-User")
-  if name == "" {
-    return User{}, fmt.Errorf("missing X-User header")
-  }
-  return User{Name: name}, nil
-}</code></pre>
-
-      <h3>Attach validators to a route</h3>
-      <p>Routes can implement:</p>
-      <pre><code>type WithValidators interface {
-  Validators() []vii.AnyValidator
-}</code></pre>
-
-      <p>
-        Wrap with <code>vii.SV(v)</code> (store by type), or use keyed forms if you need multiple values of the same type.
-      </p>
-
-      <pre><code>type HomeRoute struct{}
-
-func (HomeRoute) Validators() []vii.AnyValidator {
-  return []vii.AnyValidator{
-    vii.SV(UserVal{}), // stores User by its type
-  }
+      <p>Attach it to a route:</p>
+      <pre><code>func (UserRoute) Validators() []vii.AnyValidator {
+    return []vii.AnyValidator{
+        vii.SV(IDValidator{}), // Store by Type
+    }
 }
 
-func (HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
-  u, ok := vii.Validated[User](r)
-  if !ok {
-    return fmt.Errorf("missing User in context")
-  }
-  _, _ = w.Write([]byte("hello " + u.Name))
-  return nil
-}</code></pre>
-
-      <h3>Keyed validation (multiple instances of same type)</h3>
-      <p>If you need <em>two</em> values of the same type, use a typed key.</p>
-      <pre><code>kA := vii.NewKey[User]("A")
-kB := vii.NewKey[User]("B")
-
-validators := []vii.AnyValidator{
-  vii.V(kA, UserVal{}), // stores by type and by key
-  vii.V(kB, UserVal{}),
-}
-
-uA, okA := vii.Valid[User](r, kA)
-uB, okB := vii.Valid[User](r, kB)</code></pre>
-
-      <p class="muted">
-        Helpers:
-        <code>SV(v)</code> = store by type.
-        <code>V(key, v)</code> = store by type + key.
-        <code>KV(key, v)</code> = store only by key.
-      </p>
+// In Handle:
+id, ok := vii.Validated[UserID](r)</code></pre>
     </section>
 
     <section id="services">
-      <h2>Services <span class="pill">HTTP + WS</span></h2>
-      <p>
-        Services wrap routes with <code>Before</code>/<code>After</code>, and can optionally declare their own validators.
-        This keeps routes clean and pushes cross-cutting concerns into services.
-      </p>
-
+      <h2>Services <span class="pill">Middleware</span></h2>
+      <p>Services wrap routes. They can run logic <code>Before</code> and <code>After</code> the handler.</p>
       <pre><code>type Service interface {
   Before(r *http.Request, w http.ResponseWriter) (*http.Request, error)
   After(r *http.Request, w http.ResponseWriter) error
 }</code></pre>
-
-      <h3>Attach services to a route</h3>
-      <pre><code>type WithServices interface {
-  Services() []vii.Service
-}</code></pre>
-
-      <h3>Service that owns validation</h3>
-      <pre><code>type AuthedUser struct{ Name string }
-
-type AuthService struct{}
-
-func (AuthService) Validators() []vii.AnyValidator {
-  return []vii.AnyValidator{vii.SV(UserVal{})}
-}
-
-func (AuthService) Before(r *http.Request, w http.ResponseWriter) (*http.Request, error) {
-  _ = w
-  u, ok := vii.Validated[User](r)
-  if !ok { return r, fmt.Errorf("missing user") }
-  r = vii.WithValidated(r, AuthedUser{Name: u.Name})
-  return r, nil
-}
-
-func (AuthService) After(r *http.Request, w http.ResponseWriter) error {
-  _ = r; _ = w
-  return nil
-}</code></pre>
-
-      <h3>Service ordering &amp; dedupe</h3>
-      <ul>
-        <li><strong>Before</strong> runs in declared order.</li>
-        <li><strong>After</strong> runs in reverse order.</li>
-        <li>Service dependencies (if a service implements <code>WithServices</code>) are resolved in a DAG; cycles panic.</li>
-        <li>Services are de-duplicated by type + optional <code>ServiceKey()</code>.</li>
-      </ul>
-
-      <h3>Per-instance service identity (ServiceKey)</h3>
-      <pre><code>type ServiceKeyer interface { ServiceKey() string }</code></pre>
-      <p>If you need multiple instances of the same service type, implement <code>ServiceKey()</code> to keep them distinct.</p>
-      <pre><code>type AuditService struct {
-  Name string
-}
-
-func (s AuditService) ServiceKey() string { return s.Name }</code></pre>
+      <p class="muted">Services can also declare their own Validators, ensuring dependencies (like Auth) are met before the service logic runs.</p>
     </section>
 
-    <section id="global-services">
-      <h2>Global services <span class="pill">app.Use</span></h2>
-      <p>
-        You can install services globally on the app with <code>app.Use(...)</code>.
-        These run for <strong>every mounted route</strong> (HTTP and WS),
-        and they wrap route services.
-      </p>
+    <section id="builtins">
+      <h2>Built-in Services <span class="pill">batteries-included</span></h2>
+      <p>Common functionality ready to use via <code>app.Use()</code>.</p>
 
-      <pre><code>app := vii.New()
+      <h3>1. Logger</h3>
+      <pre><code>app.Use(vii.LoggerService{})
+// Output: [GET][/path][235µs]</code></pre>
 
-// Global middleware-like service (logging, CORS, CSRF, rate limit, tracing, etc.)
-app.Use(vii.LoggerService{})</code></pre>
+      <h3>2. Rate Limiting</h3>
+      <pre><code>// Simple RPS limit
+app.Use(&vii.RateLimitService{
+    Burst: 5,
+    RefillEvery: 200 * time.Millisecond, 
+})
 
-      <div class="callout">
-        <strong>Ordering:</strong> global services run first in <code>Before</code>, then route services.
-        In <code>After</code>, route services unwind first, then global services unwind last.
-      </div>
+// Or use helper
+app.Use(vii.RateLimitRPS(10, 20)) // 10 req/s, burst 20</code></pre>
 
-      <pre><code>// Order example:
-app.Use(GlobalA{}, GlobalB{})
-_ = app.Mount(http.MethodGet, "/x", RouteWithServices{ /* Svc1, Svc2 */ })
-
-// Before order: GlobalA → GlobalB → Svc1 → Svc2 → handler
-// After order:  handler → Svc2 → Svc1 → GlobalB → GlobalA</code></pre>
-
-      <h3>CORS: automatic preflight responses (optional)</h3>
-      <p class="muted">
-        <code>vii.CORSService</code> sets the CORS headers. If you enable <code>AutoPreflight</code>,
-        preflight requests will be answered automatically with <code>204</code> (and the pipeline halts),
-        so you do <strong>not</strong> need to mount an explicit <code>OPTIONS</code> route.
-      </p>
-
+      <h3>3. CORS</h3>
       <pre><code>app.Use(vii.CORSService{
-  Origin:        true,  // reflect request origin (or use "*" / []string / regexp / func)
-  Credentials:   false,
-  AutoPreflight: true,  // reply 204 for allowed preflight
+    Origin:        true, // Reflect origin
+    Credentials:   true,
+    AutoPreflight: true, // Handle OPTIONS automatically
 })</code></pre>
 
-      <p class="muted">
-        If <code>AutoPreflight</code> is false (default), preflight will still receive the correct headers,
-        but routing behaves normally (so you may want to mount an <code>OPTIONS</code> handler if you need a body/status).
-      </p>
+      <h3>4. CSRF Protection</h3>
+      <pre><code>app.Use(vii.CSRFService{
+    CookieName: "csrf",
+    HeaderName: "X-CSRF-Token",
+    // Protects POST, PUT, PATCH, DELETE by default
+})</code></pre>
+    </section>
+
+    <section id="templates">
+      <h2>Templates <span class="pill">html/template</span></h2>
+      <p>vii makes Go templates ergonomic with a standard set of helper functions.</p>
+      
+      <h3>Registration</h3>
+      <pre><code>// Register a file system of templates
+app.RegisterTemplates("pages", os.DirFS("./views"), vii.TemplateFuncsCommon(), "*.html")</code></pre>
+
+      <h3>Rendering</h3>
+      <pre><code>// Inside a route handler
+err := vii.Render(r, w, "pages", "home.html", data, nil)</code></pre>
+
+      <h3>Included Functions</h3>
+      <div class="grid">
+        <div>
+          <ul>
+            <li><code>lower</code> / <code>upper</code> / <code>title</code></li>
+            <li><code>trim</code></li>
+            <li><code>printf</code></li>
+            <li><code>json</code> (marshals to JS object)</li>
+          </ul>
+        </div>
+        <div>
+          <ul>
+            <li><code>dict</code> (create maps in templates)</li>
+            <li><code>get</code> (safe map access)</li>
+            <li><code>default</code> (fallback values)</li>
+            <li><code>safeHTML</code></li>
+          </ul>
+        </div>
+      </div>
     </section>
 
     <section id="context">
-      <h2>Context storage (Validated vs Keyed)</h2>
-
+      <h2>Context Storage</h2>
+      <p>Store data by <strong>Type</strong> (preferred) or by <strong>Key</strong> (advanced).</p>
       <div class="grid">
         <div>
-          <h3>Store and read by type</h3>
-          <pre><code>// store
-r = vii.WithValidated(r, User{Name: "Jace"})
+          <h3>By Type</h3>
+          <pre><code>// Write
+r = vii.WithValidated(r, MyData{...})
 
-// read
-u, ok := vii.Validated[User](r)</code></pre>
+// Read
+d, ok := vii.Validated[MyData](r)</code></pre>
         </div>
-
         <div>
-          <h3>Store and read by key</h3>
-          <pre><code>k := vii.NewKey[User]("primary")
+          <h3>By Key</h3>
+          <pre><code>// Setup Key
+var k = vii.NewKey[MyData]("k1")
 
-// store
-r = vii.WithValid(r, k, User{Name: "Jace"})
+// Write
+r = vii.WithValid(r, k, MyData{...})
 
-// read
-u, ok := vii.Valid[User](r, k)</code></pre>
+// Read
+d, ok := vii.Valid[MyData](r, k)</code></pre>
         </div>
       </div>
-
-      <p class="muted">
-        Convenience helpers:
-        <code>Provide</code>/<code>ProvideKey</code>/<code>ProvideOnlyKey</code>.
-      </p>
-
-      <pre><code>// store by type
-r = vii.Provide(r, u)
-
-// store by type + key
-r = vii.ProvideKey(r, k, u)
-
-// store only by key
-r = vii.ProvideOnlyKey(r, k, u)</code></pre>
     </section>
 
     <section id="errors">
-      <h2>Errors: route OnErr, global OnErr, and OnNotFound</h2>
-
-      <h3>Route-level errors</h3>
-      <p>
-        Any validator/service/handler error calls <code>route.OnErr</code>.
-        Your route decides how to respond (status codes, messages, logging).
-      </p>
-      <pre><code>func (HomeRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
-  _ = r
-  http.Error(w, err.Error(), http.StatusUnauthorized)
+      <h2>Error Handling</h2>
+      <h3>Route Level</h3>
+      <p>Every route must implement <code>OnErr</code>. This gives you granular control over how errors are rendered (JSON vs HTML) per route.</p>
+      <pre><code>func (MyRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
+    http.Error(w, err.Error(), 500)
 }</code></pre>
 
-      <h3>Global error hook</h3>
-      <p>The app also exposes a global hook that runs <em>after</em> the route's <code>OnErr</code>.</p>
-      <pre><code>app := vii.New()
-
-app.OnErr = func(app *vii.App, route vii.Route, r *http.Request, w http.ResponseWriter, err error) {
-  _ = app; _ = route; _ = r; _ = w
-  fmt.Println("global error:", err)
+      <h3>Global Level</h3>
+      <p>Hook into all errors for logging/monitoring.</p>
+      <pre><code>app.OnErr = func(app *vii.App, route vii.Route, r *http.Request, w http.ResponseWriter, err error) {
+    log.Printf("Error on %s: %v", r.URL.Path, err)
 }</code></pre>
-
-      <h3>Not found</h3>
-      <p>
-        If no route matches, <code>vii</code> tries static mounts. If no static mount matches, it calls <code>OnNotFound</code>.
-      </p>
-      <pre><code>app.OnNotFound = func(app *vii.App, r *http.Request, w http.ResponseWriter) {
-  _ = app
-  http.NotFound(w, r)
-}</code></pre>
-    </section>
-
-    <section id="static">
-      <h2>Static files</h2>
-      <p>
-        You can serve local or embedded files under a URL prefix. Static mounts are prefix-based (not exact).
-        If multiple mounts match, the <strong>longest prefix wins</strong>.
-      </p>
-
-      <h3>Serve local files</h3>
-      <pre><code>app := vii.New()
-
-if err := app.ServeLocalFiles("/static", "./static"); err != nil {
-  panic(err)
-}</code></pre>
-
-      <h3>Serve an embedded fs.FS</h3>
-      <pre><code>// any fs.FS works (os.DirFS, embed.FS, fstest.MapFS, etc.)
-if err := app.ServeEmbeddedFiles("/assets", os.DirFS("./public")); err != nil {
-  panic(err)
-}</code></pre>
-
-      <div class="callout">
-        <strong>Rule:</strong> Exact routes win first. Static is only attempted when there is no exact route for the request's method+path.
-      </div>
-    </section>
-
-    <section id="embedded">
-      <h2>Embedded FS registry (EmbedDir)</h2>
-      <p>
-        Besides serving static content, you can also register an <code>fs.FS</code> under a key and access it during a request.
-        The app is injected into the request context before validators/services/handlers run.
-      </p>
-
-      <h3>Register</h3>
-      <pre><code>// in your setup
-if err := app.EmbedDir("templates", os.DirFS("./templates")); err != nil {
-  panic(err)
-}</code></pre>
-
-      <h3>Read during a request</h3>
-      <pre><code>// inside a route/service/validator
-b, ok := vii.EmbeddedReadFile(r, "templates", "index.html")
-if !ok {
-  return fmt.Errorf("missing embedded file")
-}
-_, _ = w.Write(b)</code></pre>
-
-      <p class="muted">You can also fetch the fs itself:</p>
-      <pre><code>fsys, ok := vii.EmbeddedDir(r, "templates")</code></pre>
     </section>
 
     <section id="ws">
-      <h2>WebSockets <span class="pill">OPEN / MESSAGE / DRAIN / CLOSE</span></h2>
-      <p>
-        WebSockets are routed through the same app using special methods:
-        <code>vii.Method.OPEN</code>, <code>MESSAGE</code>, <code>DRAIN</code>, <code>CLOSE</code>.
-        Upgrade happens on <code>GET</code> when the request is a websocket upgrade and there is any matching WS route for the path.
-      </p>
+      <h2>WebSockets <span class="pill">Life-cycle Routing</span></h2>
+      <p>vii treats WebSocket phases as HTTP methods. You mount one struct to handle the entire lifecycle.</p>
+      <pre><code>type ChatSocket struct{}
 
-      <h3>What each method means</h3>
-      <ul>
-        <li><strong>OPEN</strong>: connection established.</li>
-        <li><strong>MESSAGE</strong>: inbound message received.</li>
-        <li><strong>DRAIN</strong>: triggered after your handler writes to the websocket (outbound payload).</li>
-        <li><strong>CLOSE</strong>: connection closed (with an error if one occurred).</li>
-      </ul>
-
-      <h3>Getting WS context</h3>
-      <pre><code>// inside ws handlers/services/validators
-conn, ok := vii.WS(r)          // *websocket.Conn
-msg, ok  := vii.WSMsg(r)       // []byte (for MESSAGE/DRAIN)
-info, ok := vii.WSCloseInfo(r) // WSClose{Err: error}</code></pre>
-
-      <h3>Minimal echo websocket</h3>
-      <pre><code>type WSEcho struct{}
-
-func (WSEcho) OnMount(app *vii.App) error { return nil }
-func (WSEcho) OnErr(r *http.Request, w http.ResponseWriter, err error) { _ = r; _ = w; _ = err }
-
-func (WSEcho) Handle(r *http.Request, w http.ResponseWriter) error {
-  switch r.Method {
-  case vii.Method.OPEN:
-    _, _ = w.Write([]byte("opened"))
-  case vii.Method.MESSAGE:
-    b, _ := vii.WSMsg(r)
-    _, _ = w.Write([]byte("echo:" + string(b)))
-  }
-  return nil
-}</code></pre>
-
-      <h3>Mounting all four methods on the same path</h3>
-      <pre><code>app := vii.New()
-
-_ = app.Mount(vii.Method.OPEN,    "/ws", WSEcho{})
-_ = app.Mount(vii.Method.MESSAGE, "/ws", WSEcho{})
-_ = app.Mount(vii.Method.DRAIN,   "/ws", WSEcho{}) // optional
-_ = app.Mount(vii.Method.CLOSE,   "/ws", WSEcho{}) // optional</code></pre>
-
-      <h3>Services &amp; validators work the same on WS</h3>
-      <p>WS handlers run through the same pipeline: route validators → service validators → service before → handler → service after.</p>
-      <pre><code>type WSUser struct{ Name string }
-
-type WSUserVal struct{}
-
-func (WSUserVal) Validate(r *http.Request) (WSUser, error) {
-  u := r.Header.Get("X-User")
-  if u == "" { return WSUser{}, fmt.Errorf("missing X-User") }
-  return WSUser{Name: u}, nil
+func (ChatSocket) Handle(r *http.Request, w http.ResponseWriter) error {
+    switch r.Method {
+    case vii.Method.OPEN:
+        fmt.Println("Connected")
+    case vii.Method.MESSAGE:
+        msg, _ := vii.WSMsg(r)
+        // Echo back
+        conn, _ := vii.WS(r)
+        websocket.Message.Send(conn, msg)
+    case vii.Method.CLOSE:
+        fmt.Println("Disconnected")
+    }
+    return nil
 }
 
-type WSAuthService struct{}
-
-func (WSAuthService) Validators() []vii.AnyValidator {
-  return []vii.AnyValidator{vii.SV(WSUserVal{})}
-}
-
-func (WSAuthService) Before(r *http.Request, w http.ResponseWriter) (*http.Request, error) { return r, nil }
-func (WSAuthService) After(r *http.Request, w http.ResponseWriter) error { return nil }
-
-type WSRoute struct{}
-
-func (WSRoute) Services() []vii.Service { return []vii.Service{WSAuthService{}} }
-func (WSRoute) OnMount(app *vii.App) error { return nil }
-func (WSRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) { _ = r; _ = w; _ = err }
-
-func (WSRoute) Handle(r *http.Request, w http.ResponseWriter) error {
-  u, _ := vii.Validated[WSUser](r)
-  _, _ = w.Write([]byte("hi " + u.Name))
-  return nil
-}</code></pre>
+// Mount
+app.Mount(vii.Method.OPEN, "/ws", ChatSocket{})
+app.Mount(vii.Method.MESSAGE, "/ws", ChatSocket{})
+app.Mount(vii.Method.CLOSE, "/ws", ChatSocket{})</code></pre>
     </section>
 
-    <section id="patterns">
-      <h2>Ergonomic patterns</h2>
-
-      <h3>1) Prefer “typed data + Validate”</h3>
-      <p class="muted">
-        You want your app code to talk in terms of <em>useful types</em>, not maps or interfaces.
-        Validators are the bridge from raw request → typed data.
-      </p>
-
-      <h3>2) Let services own cross-cutting work</h3>
-      <ul>
-        <li>Auth, CORS, CSRF, tracing, audit, rate limiting, feature flags, etc.</li>
-        <li>Services can compute and inject new typed values for routes to use.</li>
-      </ul>
-
-      <h3>3) Use global services to make things “just work”</h3>
-      <p class="muted">
-        If something should apply everywhere, prefer <code>app.Use(...)</code> so users pay setup cost once and everything feels smooth afterwards.
-      </p>
-
-      <h3>4) Use keys when you truly need multiple instances</h3>
-      <ul>
-        <li>Multiple audit services, multiple DB handles, multiple configs of the same type.</li>
-        <li>Keyed access avoids type collisions and keeps call sites explicit.</li>
-      </ul>
-
-      <h3>5) Keep routes tiny</h3>
-      <p class="muted">
-        A great route usually reads already-validated data from context, writes a response, and returns.
-      </p>
-
-      <h3>6) Treat WS as “methodful routing”</h3>
-      <p class="muted">
-        Your WS endpoint is a path, and the lifecycle phases are methods. Keep each phase focused.
-      </p>
-    </section>
-
-    <section>
-      <h2>Complete example (HTTP + global services + route services + validators)</h2>
-      <p class="muted">
-        Global CORS + Logger, two audit services (distinct instances), one user validator owned by audit, keyed service access.
-      </p>
-
-      <pre><code>package main
-
-import (
-  "fmt"
-  "net/http"
-
-  vii "github.com/phillip-england/vii/vii"
-)
-
-type User struct{ Name string }
-
-type UserVal struct{}
-
-func (UserVal) Validate(r *http.Request) (User, error) {
-  name := r.Header.Get("X-User")
-  if name == "" {
-    return User{}, fmt.Errorf("missing X-User header")
-  }
-  return User{Name: name}, nil
-}
-
-type AuditService struct {
-  Name   string
-  Prefix string
-  Key    vii.Key[AuditService]
-}
-
-func NewAuditService(name, prefix string) AuditService {
-  return AuditService{
-    Name:   name,
-    Prefix: prefix,
-    Key:    vii.NewKey[AuditService](name),
-  }
-}
-
-func (s AuditService) ServiceKey() string { return s.Name }
-
-func (s AuditService) Validators() []vii.AnyValidator {
-  return []vii.AnyValidator{vii.SV(UserVal{})}
-}
-
-func (s AuditService) Before(r *http.Request, w http.ResponseWriter) (*http.Request, error) {
-  _ = w
-  r = vii.WithValid(r, s.Key, s) // expose service instance by key
-  u, _ := vii.Validated[User](r)
-  fmt.Println("before:", s.Prefix, u.Name)
-  return r, nil
-}
-
-func (s AuditService) After(r *http.Request, w http.ResponseWriter) error {
-  _ = w
-  u, _ := vii.Validated[User](r)
-  fmt.Println("after:", s.Prefix, u.Name)
-  return nil
-}
-
-type HomeRoute struct {
-  a AuditService
-  b AuditService
-}
-
-func NewHomeRoute() HomeRoute {
-  return HomeRoute{
-    a: NewAuditService("audit-A", "A::"),
-    b: NewAuditService("audit-B", "B::"),
-  }
-}
-
-func (rt HomeRoute) Services() []vii.Service { return []vii.Service{rt.a, rt.b} }
-
-func (HomeRoute) OnMount(app *vii.App) error { return nil }
-
-func (HomeRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
-  http.Error(w, err.Error(), http.StatusUnauthorized)
-}
-
-func (rt HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
-  u, _ := vii.Validated[User](r)
-
-  a, okA := vii.Valid[AuditService](r, rt.a.Key)
-  b, okB := vii.Valid[AuditService](r, rt.b.Key)
-  if !okA || !okB {
-    return fmt.Errorf("missing audit services in ctx")
-  }
-
-  w.WriteHeader(http.StatusOK)
-  _, _ = w.Write([]byte("Hello, " + u.Name + "!\n"))
-  _, _ = w.Write([]byte(a.Prefix + u.Name + " via audit-A\n"))
-  _, _ = w.Write([]byte(b.Prefix + u.Name + " via audit-B\n"))
-  return nil
-}
-
-func main() {
-  app := vii.New()
-
-  // global services
-  app.Use(vii.CORSService{Origin: true, AutoPreflight: true})
-  app.Use(vii.LoggerService{})
-
-  // hooks
-  app.OnNotFound = func(app *vii.App, r *http.Request, w http.ResponseWriter) {
-    _ = app
-    http.NotFound(w, r)
-  }
-  app.OnErr = func(app *vii.App, route vii.Route, r *http.Request, w http.ResponseWriter, err error) {
-    _ = app; _ = route; _ = r; _ = w
-    fmt.Println("global error:", err)
-  }
-
-  _ = app.Mount(http.MethodGet, "/", NewHomeRoute())
-
-  fmt.Println(`Try: curl -H "X-User: Jace" http://localhost:8080`)
-  _ = http.ListenAndServe(":8080", app)
-}</code></pre>
-    </section>
   </main>
-
+  
   <footer class="wrap">
     <div>
       <div><strong>vii</strong> — minimal, typed, ergonomic Go servers.</div>
-      <div class="muted">Tip: keep routes small, put cross-cutting work in services, and treat validation as typed data production.</div>
+      <div class="muted">Designed for developers who value structure and type safety.</div>
     </div>
   </footer>
 </body>

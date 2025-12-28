@@ -67,6 +67,7 @@ func (a *App) RegisterTemplates(key string, fsys fs.FS, funcs template.FuncMap, 
 	if funcs != nil {
 		base = base.Funcs(funcs)
 	}
+
 	tpl, err := base.ParseFS(fsys, patterns...)
 	if err != nil {
 		return err
@@ -74,15 +75,12 @@ func (a *App) RegisterTemplates(key string, fsys fs.FS, funcs template.FuncMap, 
 
 	a.tmplMu.Lock()
 	defer a.tmplMu.Unlock()
+
 	if a.templates == nil {
 		a.templates = make(map[string]*template.Template)
 	}
 	a.templates[key] = tpl
 	return nil
-}
-
-func (a *App) RegisterTemplatesWithFuncs(key string, fsys fs.FS, funcs template.FuncMap, patterns ...string) error {
-	return a.RegisterTemplates(key, fsys, funcs, patterns...)
 }
 
 func (a *App) TemplateDir(key string, patterns ...string) error {
@@ -116,9 +114,11 @@ func (a *App) Templates(key string) (TemplateRenderer, bool) {
 	if key == "" {
 		return TemplateRenderer{}, false
 	}
+
 	a.tmplMu.RLock()
 	t := a.templates[key]
 	a.tmplMu.RUnlock()
+
 	if t == nil {
 		return TemplateRenderer{}, false
 	}
@@ -138,25 +138,17 @@ func (tr TemplateRenderer) Execute(w http.ResponseWriter, r *http.Request, name 
 	if name == "" {
 		return fmt.Errorf("vii: template name empty")
 	}
-
-	// Always ensure Vars is a non-nil map for templates (.Vars.X access).
 	if vars == nil {
 		vars = map[string]any{}
 	}
 
-	// Build view as a map for ergonomic top-level access (e.g. {{.Title}}),
-	// but also always provide .Data for users who prefer {{.Data}}.
 	view := map[string]any{}
-
-	// If data is a map, merge keys to top-level AND also preserve as .Data.
 	if m, ok := data.(map[string]any); ok && m != nil {
 		view = mergeMaps(view, m)
 		view["Data"] = m
 	} else if data != nil {
 		view["Data"] = data
 	}
-
-	// Reserved keys: enforce these last so user data can't clobber them.
 	view["Request"] = r
 	view["Vars"] = vars
 

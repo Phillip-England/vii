@@ -1,37 +1,72 @@
 # vii
-Minimal servers in Go
 
-## Installation
+Minimal, ergonomic, struct-based servers in Go.
+
+### Install
+
 ```bash
-go get github.com/Phillip-England/vii
+go get github.com/phillip-england/vii@latest
 ```
 
-## Hello, World
-1. Create a new `go` project
-2. Create a `./templates` dir
-3. Create a `./static` dir
+### Philosophy
 
-Basic Server:
+**vii** is not just a router; it's a lightweight framework. It enforces a strict separation of concerns using **Structs** instead of closure functions.
+
+1. **Routes** define endpoints.
+2. **Validators** parse and sanitise input *before* the handler runs.
+3. **Services** handle cross-cutting concerns (Middleware).
+
+### Basic Server
+
+1. Create a `main.go`:
 
 ```go
 package main
 
 import (
-	"github.com/Phillip-England/vii"
+	"fmt"
+	"net/http"
+	"github.com/phillip-england/vii/vii"
 )
 
-func main() {
-	app := vii.NewApp()
-	app.Use(vii.MwLogger, vii.MwTimeout(10))
-	app.Static("./static")
-	app.Favicon()
-	err := app.Templates("./templates", nil)
-	if err != nil {
-		panic(err)
-	}
-  app.At("GET /", func(w http.ResponseWriter, r *http.Request) {
-		vii.ExecuteTemplate(w, r, "index.html", nil)
-	})
-	app.Serve("8080")
+// 1. Define your Route
+type HomeRoute struct{}
+
+// 2. Implement the Route Interface
+func (HomeRoute) OnMount(app *vii.App) error { return nil }
+
+func (HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
+	w.Write([]byte("Hello from vii!"))
+	return nil
 }
+
+func (HomeRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
+    http.Error(w, err.Error(), 500)
+}
+
+func main() {
+	app := vii.New()
+	
+    // 3. Mount the Route
+	app.Mount(http.MethodGet, "/", HomeRoute{})
+
+	fmt.Println("Server on :8080")
+	http.ListenAndServe(":8080", app)
+}
+```
+
+### Directory Structure
+
+Since `vii` generates code, it encourages a modular layout:
+
+```text
+.
+├── main.go
+├── go.mod
+├── /routes
+│   └── home_route.go
+├── /services
+│   └── auth_service.go
+└── /validators
+    └── user_validator.go
 ```
