@@ -71,9 +71,27 @@ func runInit(args []string) {
 	runCmd(dirName, "go", "mod", "init", modPath)
 
 	// 3. Create Files (Main, Route, Service, Validator)
-	createFile(dirName, "name_validator.go", initTmplValidator())
-	createFile(dirName, "hello_service.go", initTmplService())
-	createFile(dirName, "home_route.go", initTmplRoute())
+	pkgDir := filepath.Join(dirName, "pkg")
+	routesDir := filepath.Join(pkgDir, "routes")
+	servicesDir := filepath.Join(pkgDir, "services")
+	validatorsDir := filepath.Join(pkgDir, "validators")
+
+	if err := os.MkdirAll(routesDir, 0755); err != nil {
+		fmt.Printf("Error creating routes directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(servicesDir, 0755); err != nil {
+		fmt.Printf("Error creating services directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(validatorsDir, 0755); err != nil {
+		fmt.Printf("Error creating validators directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	createFile(validatorsDir, "name_validator.go", initTmplValidator())
+	createFile(servicesDir, "hello_service.go", initTmplService())
+	createFile(routesDir, "home_route.go", initTmplRoute(modPath))
 	createFile(dirName, "main.go", initTmplMain(modPath))
 
 	// 4. Install vii & Tidy
@@ -181,6 +199,7 @@ import (
 	"fmt"
 	"net/http"
 	"github.com/phillip-england/vii/vii"
+	"%s/pkg/routes"
 )
 
 func main() {
@@ -190,7 +209,7 @@ func main() {
 	app.Use(vii.LoggerService{})
 
 	// Mount our HomeRoute at root
-	app.Mount(http.MethodGet, "/", HomeRoute{})
+	app.Mount(http.MethodGet, "/", routes.HomeRoute{})
 
 	fmt.Println("Server running on http://localhost:8080")
 	fmt.Println("Try: curl \"http://localhost:8080?name=Jace\"")
@@ -199,16 +218,18 @@ func main() {
 		panic(err)
 	}
 }
-`)
+`, modPath)
 }
 
-func initTmplRoute() string {
-	return `package main
+func initTmplRoute(modPath string) string {
+	return fmt.Sprintf(`package routes
 
 import (
 	"fmt"
 	"net/http"
 	"github.com/phillip-england/vii/vii"
+	"%s/pkg/services"
+	"%s/pkg/validators"
 )
 
 type HomeRoute struct{}
@@ -221,27 +242,27 @@ func (HomeRoute) OnMount(app *vii.App) error {
 // Services defines middleware specific to this route
 func (HomeRoute) Services() []vii.Service {
 	return []vii.Service{
-		HelloService{},
+		services.HelloService{},
 	}
 }
 
 // Validators ensures we have the data we need before Handle is called
 func (HomeRoute) Validators() []vii.AnyValidator {
 	return []vii.AnyValidator{
-		vii.SV(NameValidator{}),
+		vii.SV(validators.NameValidator{}),
 	}
 }
 
 // Handle is the core logic. Validated data is already in context.
 func (HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
 	// Retrieve typed data from NameValidator
-	data, ok := vii.Validated[NameData](r)
+	data, ok := vii.Validated[validators.NameData](r)
 	if !ok {
 		return fmt.Errorf("missing NameData")
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("Hello, %s!", data.Name)))
+	w.Write([]byte(fmt.Sprintf("Hello, %%s!", data.Name)))
 	return nil
 }
 
@@ -249,16 +270,15 @@ func (HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
 func (HomeRoute) OnErr(r *http.Request, w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusBadRequest)
 }
-`
+`, modPath, modPath)
 }
 
 func initTmplService() string {
-	return `package main
+	return `package services
 
 import (
 	"fmt"
 	"net/http"
-	"github.com/phillip-england/vii/vii"
 )
 
 // HelloService is an example service (middleware)
@@ -277,7 +297,7 @@ func (HelloService) After(r *http.Request, w http.ResponseWriter) error {
 }
 
 func initTmplValidator() string {
-	return `package main
+	return `package validators
 
 import (
 	"fmt"
