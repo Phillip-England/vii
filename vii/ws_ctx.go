@@ -20,7 +20,7 @@ type WSClose struct {
 
 // WS returns the websocket connection for the current handler, if present.
 func WS(r *http.Request) (*websocket.Conn, bool) {
-	c, ok := Validated[WSConn](r)
+	c, ok := Get[WSConn](r)
 	if !ok || c.Conn == nil {
 		return nil, false
 	}
@@ -29,7 +29,7 @@ func WS(r *http.Request) (*websocket.Conn, bool) {
 
 // WSMsg returns the current websocket message payload for MESSAGE/DRAIN handlers.
 func WSMsg(r *http.Request) ([]byte, bool) {
-	m, ok := Validated[WSMessage](r)
+	m, ok := Get[WSMessage](r)
 	if !ok {
 		return nil, false
 	}
@@ -38,5 +38,5 @@ func WSMsg(r *http.Request) ([]byte, bool) {
 
 // WSCloseInfo returns the close info for CLOSE handlers.
 func WSCloseInfo(r *http.Request) (WSClose, bool) {
-	return Validated[WSClose](r)
+	return Get[WSClose](r)
 }

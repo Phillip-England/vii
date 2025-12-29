@@ -53,7 +53,7 @@ func (w *wsWriter) Write(p []byte) (int, error) {
 	if w.app != nil && w.baseR != nil {
 		req := w.baseR.Clone(w.baseR.Context())
 		req.Method = Method.DRAIN
-		req = WithValidated(req, WSMessage{Data: append([]byte(nil), p...)})
+		req = Set(req, WSMessage{Data: append([]byte(nil), p...)})
 		w.app.dispatchWS(Method.DRAIN, w, req)
 	}
 	return len(p), nil

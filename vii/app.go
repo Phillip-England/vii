@@ -45,12 +45,21 @@ func New() *App {
 	}
 }
 
-func (a *App) MountPattern(pattern string, route Route) error {
+func (a *App) Add(pattern string, route Route) error {
 	method, path, err := splitPattern(pattern)
 	if err != nil {
 		return err
 	}
 	return a.Mount(method, path, route)
+}
+
+func (a *App) AddMany(routes map[string]Route) error {
+	for pattern, route := range routes {
+		if err := a.Add(pattern, route); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) Mount(method, path string, route Route) error {
@@ -280,7 +289,7 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 		Handler: func(conn *websocket.Conn) {
 			base := r.Clone(r.Context())
 			base = withApp(base, a)
-			base = WithValidated(base, WSConn{Conn: conn})
+			base = Set(base, WSConn{Conn: conn})
 			writer := newWSWriter(a, conn, base)
 
 			// OPEN
@@ -300,7 +309,7 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 				req := base.Clone(base.Context())
 				req.Method = Method.MESSAGE
-				req = WithValidated(req, WSMessage{Data: msg})
+				req = Set(req, WSMessage{Data: msg})
 				a.dispatchWS(Method.MESSAGE, writer, req)
 			}
 
@@ -308,7 +317,7 @@ func (a *App) serveWebSocket(w http.ResponseWriter, r *http.Request) {
 			{
 				req := base.Clone(base.Context())
 				req.Method = Method.CLOSE
-				req = WithValidated(req, WSClose{Err: closeErr})
+				req = Set(req, WSClose{Err: closeErr})
 				a.dispatchWS(Method.CLOSE, writer, req)
 			}
 		},

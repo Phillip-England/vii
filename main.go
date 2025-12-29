@@ -209,7 +209,7 @@ func main() {
 	app.Use(vii.LoggerService{})
 
 	// Mount our HomeRoute at root
-	app.Mount(http.MethodGet, "/", routes.HomeRoute{})
+	app.Add("GET /", routes.HomeRoute{})
 
 	fmt.Println("Server running on http://localhost:8080")
 	fmt.Println("Try: curl \"http://localhost:8080?name=Jace\"")
@@ -256,7 +256,7 @@ func (HomeRoute) Validators() []vii.AnyValidator {
 // Handle is the core logic. Validated data is already in context.
 func (HomeRoute) Handle(r *http.Request, w http.ResponseWriter) error {
 	// Retrieve typed data from NameValidator
-	data, ok := vii.Validated[validators.NameData](r)
+	data, ok := vii.Get[validators.NameData](r)
 	if !ok {
 		return fmt.Errorf("missing NameData")
 	}

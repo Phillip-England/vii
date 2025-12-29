@@ -111,6 +111,10 @@ func keyString[T any](k Key[T]) string {
 }
 
 func WithValidated[T any](r *http.Request, value T) *http.Request {
+	return Set(r, value)
+}
+
+func Set[T any](r *http.Request, value T) *http.Request {
 	if r == nil {
 		return nil
 	}
@@ -123,6 +127,10 @@ func WithValidated[T any](r *http.Request, value T) *http.Request {
 }
 
 func Validated[T any](r *http.Request) (T, bool) {
+	return Get[T](r)
+}
+
+func Get[T any](r *http.Request) (T, bool) {
 	var zero T
 	t := typeOf[T]()
 	s := getStore(r)
@@ -138,6 +146,10 @@ func Validated[T any](r *http.Request) (T, bool) {
 }
 
 func WithValid[T any](r *http.Request, k Key[T], value T) *http.Request {
+	return SetKey(r, k, value)
+}
+
+func SetKey[T any](r *http.Request, k Key[T], value T) *http.Request {
 	if r == nil {
 		return nil
 	}
@@ -149,6 +161,10 @@ func WithValid[T any](r *http.Request, k Key[T], value T) *http.Request {
 }
 
 func Valid[T any](r *http.Request, k Key[T]) (T, bool) {
+	return GetKey(r, k)
+}
+
+func GetKey[T any](r *http.Request, k Key[T]) (T, bool) {
 	var zero T
 	s := getStore(r)
 	v, ok := s.byKey[keyString(k)]

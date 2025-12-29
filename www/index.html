@@ -174,8 +174,8 @@ func main() {
         <div>
           <h3>Type-safe Context</h3>
           <ul>
-            <li><code>vii.Validated[T](r)</code>: Get data by type.</li>
-            <li><code>vii.Valid[T](r, key)</code>: Get data by key.</li>
+            <li><code>vii.Get[T](r)</code>: Get data by type.</li>
+            <li><code>vii.GetKey[T](r, key)</code>: Get data by key.</li>
             <li>No more stringly-typed context maps.</li>
           </ul>
         </div>
@@ -191,8 +191,8 @@ func main() {
   OnErr(r *http.Request, w http.ResponseWriter, err error)
 }</code></pre>
       <h3>Mounting</h3>
-      <pre><code>app.Mount(http.MethodGet, "/users", UserRoute{})
-app.MountPattern("POST /users", CreateUserRoute{})</code></pre>
+      <pre><code>app.Add("GET /users", UserRoute{})
+app.Add("POST /users", CreateUserRoute{})</code></pre>
     </section>
 
     <section id="validators">
@@ -215,7 +215,7 @@ func (IDValidator) Validate(r *http.Request) (UserID, error) {
 }
 
 // In Handle:
-id, ok := vii.Validated[UserID](r)</code></pre>
+id, ok := vii.Get[UserID](r)</code></pre>
     </section>
 
     <section id="services">
@@ -301,10 +301,10 @@ err := vii.Render(r, w, "pages", "home.html", data, nil)</code></pre>
         <div>
           <h3>By Type</h3>
           <pre><code>// Write
-r = vii.WithValidated(r, MyData{...})
+r = vii.Set(r, MyData{...})
 
 // Read
-d, ok := vii.Validated[MyData](r)</code></pre>
+d, ok := vii.Get[MyData](r)</code></pre>
         </div>
         <div>
           <h3>By Key</h3>
@@ -312,10 +312,10 @@ d, ok := vii.Validated[MyData](r)</code></pre>
 var k = vii.NewKey[MyData]("k1")
 
 // Write
-r = vii.WithValid(r, k, MyData{...})
+r = vii.SetKey(r, k, MyData{...})
 
 // Read
-d, ok := vii.Valid[MyData](r, k)</code></pre>
+d, ok := vii.GetKey[MyData](r, k)</code></pre>
         </div>
       </div>
     </section>
@@ -356,9 +356,9 @@ func (ChatSocket) Handle(r *http.Request, w http.ResponseWriter) error {
 }
 
 // Mount
-app.Mount(vii.Method.OPEN, "/ws", ChatSocket{})
-app.Mount(vii.Method.MESSAGE, "/ws", ChatSocket{})
-app.Mount(vii.Method.CLOSE, "/ws", ChatSocket{})</code></pre>
+app.Add("OPEN /ws", ChatSocket{})
+app.Add("MESSAGE /ws", ChatSocket{})
+app.Add("CLOSE /ws", ChatSocket{})</code></pre>
     </section>
 
   </main>

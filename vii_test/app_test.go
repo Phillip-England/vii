@@ -37,10 +37,10 @@ func (s logService) ServiceKey() string { return s.name }
 func (s logService) Before(r *http.Request, w http.ResponseWriter) (*http.Request, error) {
 	_ = w
 	*s.log = append(*s.log, "svc.before."+s.name)
-	if _, ok := vii.Validated[testValidated](r); !ok {
+	if _, ok := vii.Get[testValidated](r); !ok {
 		return r, errors.New("service missing validated data")
 	}
-	r = vii.WithValidated(r, s)
+	r = vii.Set(r, s)
 	return r, nil
 }
 
@@ -110,7 +110,7 @@ func (tr *testRoute) Handle(r *http.Request, w http.ResponseWriter) error {
 	// Default handler behavior used by most tests.
 	*tr.log = append(*tr.log, "route.handle")
 
-	if v, ok := vii.Validated[testValidated](r); ok {
+	if v, ok := vii.Get[testValidated](r); ok {
 		*tr.log = append(*tr.log, "handler.validated."+v.V)
 	} else {
 		*tr.log = append(*tr.log, "handler.validated.missing")
@@ -406,13 +406,13 @@ func (s ownedValidatorService) Before(r *http.Request, w http.ResponseWriter) (*
 	_ = w
 	*s.log = append(*s.log, "svc.before.owned")
 
-	v, ok := vii.Validated[testValidated](r)
+	v, ok := vii.Get[testValidated](r)
 	if !ok {
 		return r, errors.New("owned service missing validated data")
 	}
 
 	// expose derived/service data to route
-	r = vii.WithValidated(r, OwnedData{Got: v.V})
+	r = vii.Set(r, OwnedData{Got: v.V})
 	return r, nil
 }
 
@@ -438,7 +438,7 @@ func TestService_OwnsItsValidation_AndExposesDataToRoute(t *testing.T) {
 	// Route handle checks service-provided data
 	rt.handleFn = func(r *http.Request, w http.ResponseWriter) error {
 		*rt.log = append(*rt.log, "route.handle")
-		if d, ok := vii.Validated[OwnedData](r); ok {
+		if d, ok := vii.Get[OwnedData](r); ok {
 			*rt.log = append(*rt.log, "handler.owned."+d.Got)
 		} else {
 			*rt.log = append(*rt.log, "handler.owned.missing")
@@ -477,4 +477,54 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestMountAll_MountsMultipleRoutes(t *testing.T) {
+	app := vii.New()
+	var log []string
+	rt1 := &testRoute{log: &log}
+	rt2 := &testRoute{log: &log}
+
+	routes := map[string]vii.Route{
+		"GET /one": rt1,
+		"POST /two": rt2,
+	}
+
+	if err := app.AddMany(routes); err != nil {
+		t.Fatalf("AddMany err: %v", err)
+	}
+
+	if !rt1.onMountCalled {
+		t.Fatalf("expected rt1 OnMount to be called")
+	}
+	if !rt2.onMountCalled {
+		t.Fatalf("expected rt2 OnMount to be called")
+	}
+
+	// Verify rt1 reachable
+	req1 := httptest.NewRequest(http.MethodGet, "/one", nil)
+	rec1 := httptest.NewRecorder()
+	app.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /one, got %d", rec1.Code)
+	}
+
+	// Verify rt2 reachable
+	req2 := httptest.NewRequest(http.MethodPost, "/two", nil)
+	rec2 := httptest.NewRecorder()
+	app.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /two, got %d", rec2.Code)
+	}
+}
+
+func TestMountAll_SupportsWebSocketMethods(t *testing.T) {
+	app := vii.New()
+	routes := map[string]vii.Route{
+		"OPEN /ws":    &testRoute{log: &[]string{}},
+		"MESSAGE /ws": &testRoute{log: &[]string{}},
+	}
+	if err := app.AddMany(routes); err != nil {
+		t.Fatalf("AddMany failed with WS methods: %v", err)
+	}
 }

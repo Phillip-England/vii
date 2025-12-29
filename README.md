@@ -48,7 +48,7 @@ func main() {
 	app := vii.New()
 	
     // 3. Mount the Route
-	app.Mount(http.MethodGet, "/", HomeRoute{})
+	app.Add("GET /", HomeRoute{})
 
 	fmt.Println("Server on :8080")
 	http.ListenAndServe(":8080", app)
