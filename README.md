@@ -55,6 +55,39 @@ func main() {
 }
 ```
 
+### Dependency Injection
+
+**vii** provides a simple way to inject singletons (like configuration or database pools) into your server and retrieve them within your routes.
+
+1. **Inject your singleton**:
+
+```go
+const ConfigKey vii.InjectionKey = "config"
+
+type Config struct {
+    APIKey string
+}
+
+func main() {
+    app := vii.New()
+    app.Inject(ConfigKey, Config{APIKey: "secret-key"})
+    // ...
+}
+```
+
+2. **Retrieve in your Route**:
+
+```go
+func (r *HomeRoute) Handle(req *http.Request, w http.ResponseWriter) error {
+    cfg, ok := vii.Injection[Config](req, ConfigKey)
+    if !ok {
+        return fmt.Errorf("config not found")
+    }
+    // Use cfg.APIKey
+    return nil
+}
+```
+
 ### Directory Structure
 
 Since `vii` generates code, it encourages a modular layout:

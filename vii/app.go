@@ -13,10 +13,13 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+type InjectionKey string
+
 type App struct {
 	mux        map[string]*http.ServeMux
 	static     []staticMount
 	embedded   map[string]fs.FS
+	injections map[InjectionKey]any
 	services   []Service // NEW: global services
 	tmplMu     sync.RWMutex
 	templates  map[string]*template.Template
@@ -26,11 +29,12 @@ type App struct {
 
 func New() *App {
 	return &App{
-		mux:       make(map[string]*http.ServeMux),
-		static:    nil,
-		embedded:  make(map[string]fs.FS),
-		services:  nil,
-		templates: make(map[string]*template.Template),
+		mux:        make(map[string]*http.ServeMux),
+		static:     nil,
+		embedded:   make(map[string]fs.FS),
+		injections: make(map[InjectionKey]any),
+		services:   nil,
+		templates:  make(map[string]*template.Template),
 		OnErr: func(app *App, route Route, r *http.Request, w http.ResponseWriter, err error) {
 			_ = app
 			_ = route
@@ -43,6 +47,21 @@ func New() *App {
 			http.NotFound(w, r)
 		},
 	}
+}
+
+func (a *App) Inject(key InjectionKey, value any) *App {
+	if a.injections == nil {
+		a.injections = make(map[InjectionKey]any)
+	}
+	a.injections[key] = value
+	return a
+}
+
+func (a *App) getInjection(key InjectionKey) any {
+	if a == nil || a.injections == nil {
+		return nil
+	}
+	return a.injections[key]
 }
 
 func (a *App) Add(pattern string, route Route) error {

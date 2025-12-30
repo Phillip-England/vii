@@ -88,6 +88,7 @@
         <a href="#builtins">Built-ins</a>
         <a href="#templates">Templates</a>
         <a href="#context">Context</a>
+        <a href="#injection">Injection</a>
         <a href="#errors">Errors</a>
         <a href="#ws">WebSockets</a>
       </nav>
@@ -316,6 +317,24 @@ r = vii.SetKey(r, k, MyData{...})
 
 // Read
 d, ok := vii.GetKey[MyData](r, k)</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="injection">
+      <h2>Dependency Injection <span class="pill">Singletons</span></h2>
+      <p>Inject dependencies (Config, DB, etc.) into the app and retrieve them in your routes.</p>
+      <div class="grid">
+        <div>
+          <h3>1. Inject</h3>
+          <pre><code>const CfgKey vii.InjectionKey = "cfg"
+
+app.Inject(CfgKey, MyConfig{...})</code></pre>
+        </div>
+        <div>
+          <h3>2. Retrieve</h3>
+          <pre><code>// In your handler
+cfg, ok := vii.Injection[MyConfig](r, CfgKey)</code></pre>
         </div>
       </div>
     </section>

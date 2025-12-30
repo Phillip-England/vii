@@ -46,3 +46,20 @@ func EmbeddedReadFile(r *http.Request, key string, path string) ([]byte, bool) {
 	}
 	return b, true
 }
+
+func Injection[T any](r *http.Request, key InjectionKey) (T, bool) {
+	var zero T
+	app, ok := AppFrom(r)
+	if !ok {
+		return zero, false
+	}
+	val := app.getInjection(key)
+	if val == nil {
+		return zero, false
+	}
+	tVal, ok := val.(T)
+	if !ok {
+		return zero, false
+	}
+	return tVal, true
+}
