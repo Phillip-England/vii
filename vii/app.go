@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"reflect"
 	"strings"
 	"sync"
@@ -217,7 +218,22 @@ func (a *App) ServeEmbeddedFiles(prefix string, f fs.FS) error {
 		return fmt.Errorf("vii: embedded fs is nil")
 	}
 
-	h := http.StripPrefix(prefix, http.FileServer(http.FS(f)))
+	fileServer := http.FileServer(http.FS(f))
+	wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// r.URL.Path is relative to the prefix (stripped by http.StripPrefix below)
+		fsPath := strings.TrimPrefix(r.URL.Path, "/")
+
+		// If not root and no extension, try .html
+		if fsPath != "" && path.Ext(fsPath) == "" {
+			htmlPath := fsPath + ".html"
+			if _, err := fs.Stat(f, htmlPath); err == nil {
+				r.URL.Path += ".html"
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+
+	h := http.StripPrefix(prefix, wrapper)
 	a.static = append(a.static, staticMount{
 		prefix:  prefix,
 		handler: h,

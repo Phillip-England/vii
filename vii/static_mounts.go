@@ -29,7 +29,14 @@ func (a *App) tryStatic(w http.ResponseWriter, r *http.Request) bool {
 		}
 
 		// Match "/static" OR "/static/..."
-		if path == p || strings.HasPrefix(path, p+"/") {
+		matched := false
+		if p == "/" {
+			matched = true
+		} else if path == p || strings.HasPrefix(path, p+"/") {
+			matched = true
+		}
+
+		if matched {
 			if len(p) > bestLen {
 				bestLen = len(p)
 				bestIdx = i

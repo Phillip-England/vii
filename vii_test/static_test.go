@@ -118,6 +118,71 @@ func TestStatic_LocalFiles_ServesFromDisk(t *testing.T) {
 	}
 }
 
+func TestStatic_ExtensionlessHtml(t *testing.T) {
+	app := vii.New()
+
+	efs := fstest.MapFS{
+		"about.html": &fstest.MapFile{Data: []byte("<h1>About</h1>")},
+		"contact.html": &fstest.MapFile{Data: []byte("<h1>Contact</h1>")},
+		"css/style.css": &fstest.MapFile{Data: []byte("body { color: red; }")},
+	}
+
+	if err := app.ServeEmbeddedFiles("/", efs); err != nil {
+		t.Fatalf("ServeEmbeddedFiles: %v", err)
+	}
+
+	ts := httptest.NewServer(app)
+	defer ts.Close()
+
+	// 1. /about -> should serve about.html
+	{
+		res, err := http.Get(ts.URL + "/about")
+		if err != nil {
+			t.Fatalf("get /about: %v", err)
+		}
+		defer res.Body.Close()
+		b, _ := readAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("expected 200 for /about, got %d", res.StatusCode)
+		}
+		if string(b) != "<h1>About</h1>" {
+			t.Fatalf("expected about.html content, got %q", string(b))
+		}
+	}
+
+	// 2. /contact -> should serve contact.html
+	{
+		res, err := http.Get(ts.URL + "/contact")
+		if err != nil {
+			t.Fatalf("get /contact: %v", err)
+		}
+		defer res.Body.Close()
+		b, _ := readAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("expected 200 for /contact, got %d", res.StatusCode)
+		}
+		if string(b) != "<h1>Contact</h1>" {
+			t.Fatalf("expected contact.html content, got %q", string(b))
+		}
+	}
+
+	// 3. /css/style.css -> should still work
+	{
+		res, err := http.Get(ts.URL + "/css/style.css")
+		if err != nil {
+			t.Fatalf("get /css/style.css: %v", err)
+		}
+		defer res.Body.Close()
+		b, _ := readAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("expected 200 for /css/style.css, got %d", res.StatusCode)
+		}
+		if string(b) != "body { color: red; }" {
+			t.Fatalf("expected style.css content, got %q", string(b))
+		}
+	}
+}
+
 func TestStatic_LongestPrefixWins(t *testing.T) {
 	app := vii.New()
 
