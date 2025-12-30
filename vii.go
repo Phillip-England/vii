@@ -230,27 +230,7 @@ func chain(h http.HandlerFunc, middleware ...func(http.Handler) http.Handler) ht
 
 func MwTimeout(seconds int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			done := make(chan bool)
-			ctx, cancel := context.WithTimeout(r.Context(), time.Duration(seconds)*time.Second)
-			defer cancel()
-			r = r.WithContext(ctx)
-			go func() {
-				next.ServeHTTP(w, r)
-				select {
-				case <-ctx.Done():
-					return
-				case done <- true:
-				}
-			}()
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				http.Error(w, "Request timed out", http.StatusGatewayTimeout)
-				return
-			}
-		})
+		return http.TimeoutHandler(next, time.Duration(seconds)*time.Second, "Request timed out")
 	}
 }
 
