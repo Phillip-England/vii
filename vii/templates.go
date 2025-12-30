@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -46,6 +47,29 @@ func mergeMaps(dst, src map[string]any) map[string]any {
 		dst[k] = v
 	}
 	return dst
+}
+
+func (a *App) TemplateLocalDir(key string, dir string, patterns ...string) error {
+	return a.TemplateLocalDirWithFuncs(key, dir, nil, patterns...)
+}
+
+func (a *App) TemplateLocalDirWithFuncs(key string, dir string, funcs template.FuncMap, patterns ...string) error {
+	if a == nil {
+		return fmt.Errorf("vii: app is nil")
+	}
+	if dir == "" {
+		return fmt.Errorf("vii: local template dir is empty")
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("vii: stat local template dir: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("vii: local template path is not a directory: %s", dir)
+	}
+
+	return a.RegisterTemplates(key, os.DirFS(dir), funcs, patterns...)
 }
 
 func (a *App) RegisterTemplates(key string, fsys fs.FS, funcs template.FuncMap, patterns ...string) error {
