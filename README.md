@@ -19,7 +19,7 @@ vii provides a simple yet powerful API to build web applications and services, g
 The library code is in the `pkg` directory. To use it, import it in your Go files:
 
 ```go
-import "github.com/Phillip-England/vii/pkg"
+import "github.com/Phillip-England/vii/vii"
 ```
 
 ## Full Usage Example
@@ -50,7 +50,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Phillip-England/vii/pkg"
+	"github.com/Phillip-England/vii/vii"
 )
 
 // (Optional) Embed static files and templates for single-binary deployment.
