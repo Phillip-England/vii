@@ -9,7 +9,7 @@ import (
 
 func (app *App) Favicon(middleware ...func(http.Handler) http.Handler) {
 	app.Mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		chain(func(w http.ResponseWriter, r *http.Request) {
+		Chain(func(w http.ResponseWriter, r *http.Request) {
 			filePath := "favicon.ico"
 			fullPath := filepath.Join(".", ".", filePath)
 			http.ServeFile(w, r, fullPath)
@@ -26,7 +26,7 @@ func (app *App) ServeDir(urlPrefix string, dirPath string, middleware ...func(ht
 	stripHandler := http.StripPrefix(urlPrefix, fileServer)
 	var handler http.Handler = stripHandler
 	if len(middleware) > 0 {
-		handler = chain(stripHandler.ServeHTTP, middleware...)
+		handler = Chain(stripHandler.ServeHTTP, middleware...)
 	}
 	app.Mux.Handle("GET "+urlPrefix, handler)
 }
@@ -46,7 +46,7 @@ func (app *App) ServeFS(urlPrefix string, fileSystem fs.FS, middleware ...func(h
 
 	var handler http.Handler = stripHandler
 	if len(middleware) > 0 {
-		handler = chain(stripHandler.ServeHTTP, middleware...)
+		handler = Chain(stripHandler.ServeHTTP, middleware...)
 	}
 
 	app.Mux.Handle("GET "+urlPrefix, handler)

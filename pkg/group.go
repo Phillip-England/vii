@@ -30,6 +30,6 @@ func (g *Group) Handle(path string, handler http.HandlerFunc, middleware ...func
 	allMiddleware := append(g.middleware, middleware...)
 	g.parent.Mux.HandleFunc(method+" "+resolvedPath, func(w http.ResponseWriter, r *http.Request) {
 		r = SetContext("GLOBAL", g.parent.GlobalContext, r)
-		chain(handler, allMiddleware...).ServeHTTP(w, r)
+		Chain(handler, allMiddleware...).ServeHTTP(w, r)
 	})
 }

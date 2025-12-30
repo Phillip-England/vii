@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vii - Minimal Go Web Framework</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+            line-height: 1.6;
+            color: #333;
+            background-color: #fdfdfd;
+            margin: 0;
+            padding: 20px;
+        }
+        main {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1, h2, h3 {
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            font-weight: 600;
+        }
+        h1 {
+            font-size: 2.5em;
+        }
+        h2 {
+            font-size: 2em;
+        }
+        h3 {
+            font-size: 1.5em;
+        }
+        p {
+            margin-bottom: 1.2em;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 0.5em;
+        }
+        pre {
+            background-color: #f6f8fa;
+            border-radius: 6px;
+            padding: 16px;
+            overflow: auto;
+            font-size: 85%;
+            line-height: 1.45;
+        }
+        code {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            font-size: 1em;
+        }
+        pre code {
+            padding: 0;
+            margin: 0;
+            background-color: transparent;
+            border: 0;
+        }
+        code:not(pre code) {
+            padding: .2em .4em;
+            margin: 0;
+            font-size: 85%;
+            background-color: rgba(27,31,35,.05);
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>vii</h1>
+        <p>A minimal, expressive, and fast web framework for Go.</p>
+        <p>vii provides a simple yet powerful API to build web applications and services, getting out of your way so you can focus on your logic.</p>
+
+        <h2>Features</h2>
+        <ul>
+            <li><strong>Simple Routing:</strong> Expressive and straightforward route definition.</li>
+            <li><strong>Route Groups:</strong> Organize your routes and apply middleware to entire groups.</li>
+            <li><strong>Middleware Support:</strong> Comes with built-in middleware for logging, timeouts, CORS, and rate limiting. Easily add your own.</li>
+            <li><strong>Flexible Template Rendering:</strong> Load HTML templates from the filesystem at runtime or embed them into your binary for single-file deployment.</li>
+            <li><strong>Flexible Static File Serving:</strong> Serve static assets from a directory or from a compile-time embedded filesystem.</li>
+            <li><strong>Reusable URL Primitives:</strong> Define URL patterns once and reuse them for type-safe URL generation and parameter parsing.</li>
+            <li><strong>Helper Functions:</strong> A rich set of helpers for handling requests (JSON, headers, cookies) and writing responses (JSON, errors, redirects).</li>
+        </ul>
+
+        <h2>Installation</h2>
+        <p>The library code is in the <code>pkg</code> directory. To use it, import it in your Go files:</p>
+        <pre><code>import "github.com/Phillip-England/vii/pkg"</code></pre>
+
+        <h2>Full Usage Example</h2>
+        <p>Here is a complete example demonstrating the main features of vii.</p>
+        
+        <h3>Project Structure:</h3>
+        <pre><code>/my-app
+├── go.mod
+├── main.go
+├── static/
+│   └── style.css
+└── templates/
+    ├── index.html
+    └── layout.html</code></pre>
+
+        <h3><code>main.go</code>:</h3>
+        <pre><code>package main
+
+import (
+    "embed"
+    "fmt"
+    "net/http"
+    "time"
+
+    "github.com/Phillip-England/vii/pkg"
+)
+
+// (Optional) Embed static files and templates for single-binary deployment.
+//go:embed static/*
+var embeddedStaticFS embed.FS
+
+//go:embed templates/*.html
+var embeddedTemplateFS embed.FS
+
+// Define a reusable URL primitive
+var greetURL = vii.NewURL("/greet").WithQuery("name")
+
+func main() {
+    // --- 1. Initialization ---
+    app := vii.NewApp()
+
+    // --- 2. Global Middleware ---
+    // Apply middleware to all routes.
+    app.Use(vii.Logger, vii.CORS, vii.RateLimiter(vii.RateLimiterConfig{Limit: 100, Window: time.Minute}))
+
+    // --- 3. Templates ---
+    // Choose one method for loading templates:
+
+    // Method A: Load from the filesystem (good for development)
+    // if err := app.LoadTemplates("templates", nil); err != nil {
+    // 	panic(err)
+    // }
+
+    // Method B: Load from embedded filesystem (good for production)
+    if err := app.LoadTemplatesFS(embeddedTemplateFS, nil); err != nil {
+        panic(err)
+    }
+
+    // --- 4. Static Files ---
+    // Choose one method for serving static files:
+
+    // Method A: Serve from the filesystem (good for development)
+    // app.ServeDir("/static", "static")
+
+    // Method B: Serve from embedded filesystem (good for production)
+    app.ServeFS("/static", embeddedStaticFS)
+    
+    // You can also register a handler for the favicon.
+    app.Favicon()
+
+    // --- 5. Routing ---
+    // Register a handler for the root path.
+    app.Handle("GET /", func(w http.ResponseWriter, r *http.Request) {
+        // The Render function finds and executes a template by its filename.
+        data := map[string]string{"Title": "Home Page"}
+        if err := vii.Render(w, r, "index.html", data); err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+        }
+    })
+
+    // --- 6. Route Grouping ---
+    // Group routes under a common prefix and apply group-specific middleware.
+    apiGroup := app.Group("/api")
+    apiGroup.Use(vii.Timeout(10)) // Apply a 10-second timeout to all /api routes.
+
+    apiGroup.Handle("GET /greet", func(w http.ResponseWriter, r *http.Request) {
+        params := greetURL.Parse(r)
+        name := params["name"]
+        if name == "" {
+            name = "World"
+        }
+        
+        // Example of building a URL with the primitive
+        exampleURL := greetURL.Build(vii.Values{"name": "Alice"})
+        fmt.Println("Example generated URL:", exampleURL)
+
+        vii.WriteJSON(w, http.StatusOK, map[string]string{"message": "Hello, " + name})
+    })
+    
+    // --- 7. Start Server ---
+    // Start the application server on port 8080.
+    if err := app.Serve("8080"); err != nil {
+        panic(err)
+    }
+}
+</code></pre>
+
+        <h2>API Overview</h2>
+
+        <h3>Core App</h3>
+        <ul>
+            <li><code>vii.NewApp() *App</code>: Creates a new vii application instance.</li>
+            <li><code>app.Use(middleware ...)</code>: Applies one or more global middleware to all routes.</li>
+            <li><code>app.Handle(pattern string, handler http.HandlerFunc, ...)</code>: Registers a handler for a specific method and path pattern (e.g., <code>"GET /"</code>).</li>
+            <li><code>app.Serve(port string) error</code>: Starts the HTTP server.</li>
+        </ul>
+
+        <h3>Routing and Groups</h3>
+        <ul>
+            <li><code>app.Group(prefix string) *Group</code>: Creates a new route group with a URL prefix.</li>
+            <li><code>group.Use(middleware ...)</code>: Applies middleware to all routes within the group.</li>
+            <li><code>group.Handle(...)</code>: Registers a handler within the group.</li>
+        </ul>
+
+        <h3>Templates</h3>
+        <ul>
+            <li><code>app.LoadTemplates(path string, ...) error</code>: Loads and parses HTML templates from a directory on the filesystem.</li>
+            <li><code>app.LoadTemplatesFS(fs fs.FS, ...) error</code>: Loads and parses HTML templates from an embedded filesystem (<code>embed.FS</code>).</li>
+            <li><code>vii.Render(w, r, templateName string, data any) error</code>: Renders a previously loaded template by its filename.</li>
+        </ul>
+
+        <h3>Static Files</h3>
+        <ul>
+            <li><code>app.ServeDir(urlPrefix string, dirPath string, ...)</code>: Serves static files from a directory on the filesystem.</li>
+            <li><code>app.ServeFS(urlPrefix string, fs fs.FS, ...)</code>: Serves static files from an embedded filesystem.</li>
+            <li><code>app.Favicon(...)</code>: Registers a handler to serve a <code>favicon.ico</code> file from the project root.</li>
+        </ul>
+        
+        <h3>Request Helpers</h3>
+        <ul>
+            <li><code>vii.ReadJSON(r *http.Request, v interface{}) error</code>: Decodes a JSON request body into a struct or map.</li>
+            <li><code>vii.Header(r *http.Request, key string) string</code>: Gets a request header value.</li>
+            <li><code>vii.Cookie(r *http.Request, name string) (*http.Cookie, error)</code>: Retrieves a specific cookie.</li>
+            <li><code>vii.Query(r *http.Request, name string) string</code>: Gets a URL query parameter's value.</li>
+        </ul>
+
+        <h3>Response Writers</h3>
+        <ul>
+            <li><code>vii.WriteJSON(w, statusCode int, data any) error</code>: Writes a JSON response.</li>
+            <li><code>vii.WriteHTML(w, statusCode int, htmlContent string)</code>: Writes a raw HTML string response.</li>
+            <li><code>vii.WriteText(w, statusCode int, textContent string)</code>: Writes a plain text response.</li>
+            <li><code>vii.WriteError(w, statusCode int, message string) error</code>: Writes a consistent JSON error response.</li>
+            <li><code>vii.Redirect(w, r, url string, code int)</code>: Performs an HTTP redirect.</li>
+            <li><code>vii.SetHeader(w, key, value string)</code>: Sets a response header.</li>
+            <li><code>vii.SetCookie(w, cookie *http.Cookie)</code>: Sets a response cookie.</li>
+        </ul>
+
+        <h3>Middleware</h3>
+        <ul>
+            <li><code>vii.Logger</code>: A request logger that prints the method, path, and request duration.</li>
+            <li><code>vii.Timeout(seconds int)</code>: A middleware that applies a timeout to requests.</li>
+            <li><code>vii.CORS</code>: A permissive Cross-Origin Resource Sharing (CORS) middleware.</li>
+            <li><code>vii.RateLimiter(config RateLimiterConfig)</code>: An in-memory, IP-based rate-limiting middleware.</li>
+        </ul>
+        
+        <h3>URL Primitive</h3>
+        <ul>
+            <li><code>vii.NewURL(path string) *URL</code>: Creates a new URL definition.</li>
+            <li><code>url.WithQuery(params ...string) *URL</code>: Adds expected query parameters to the definition.</li>
+            <li><code>url.Build(values Values) string</code>: Builds a URL string with query parameters.</li>
+            <li><code>url.Parse(r *http.Request) Values</code>: Extracts defined query parameters from a request.</li>
+        </ul>
+    </main>
+</body>
+</html>

@@ -1,0 +1,2 @@
+docs:
+	bun ./README.html
