@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"io/fs" // [NEW] Required for handling embedded filesystems
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/a-h/templ"
 )
 
 type Group struct {
@@ -222,7 +220,8 @@ func (app *App) Serve(port string) error {
 
 func chain(h http.HandlerFunc, middleware ...func(http.Handler) http.Handler) http.Handler {
 	finalHandler := http.Handler(h)
-	for _, m := range middleware {
+	for i := len(middleware) - 1; i >= 0; i-- {
+		m := middleware[i]
 		finalHandler = m(finalHandler)
 	}
 	return finalHandler
@@ -341,11 +340,4 @@ func WriteJSON(w http.ResponseWriter, statusCode int, data interface{}) error {
 	return nil
 }
 
-func WriteTempl(w http.ResponseWriter, r *http.Request, component templ.Component) error {
-	w.Header().Add("Content-Type", "text/html")
-	err := component.Render(r.Context(), w)
-	if err != nil {
-		return err
-	}
-	return nil
-}
+

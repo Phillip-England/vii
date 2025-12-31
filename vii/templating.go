@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //=====================================
@@ -57,10 +58,27 @@ func (app *App) LoadTemplatesFS(fileSystem fs.FS, funcMap template.FuncMap) erro
 		vbfFuncMap[k] = v
 	}
 
-	// ParseFS handles the walking and matching of patterns natively
-	templates, err := template.New("").Funcs(vbfFuncMap).ParseFS(fileSystem, "**/*.html")
+	templates := template.New("").Funcs(vbfFuncMap)
+
+	var paths []string
+	err := fs.WalkDir(fileSystem, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".html") {
+			paths = append(paths, path)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
+	}
+
+	if len(paths) > 0 {
+		_, err = templates.ParseFS(fileSystem, paths...)
+		if err != nil {
+			return err
+		}
 	}
 
 	app.SetContext(VII_CONTEXT, templates)

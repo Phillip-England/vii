@@ -14,7 +14,8 @@ import (
 
 func Chain(h http.HandlerFunc, middleware ...func(http.Handler) http.Handler) http.Handler {
 	finalHandler := http.Handler(h)
-	for _, m := range middleware {
+	for i := len(middleware) - 1; i >= 0; i-- {
+		m := middleware[i]
 		finalHandler = m(finalHandler)
 	}
 	return finalHandler

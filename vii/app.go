@@ -11,6 +11,7 @@ type App struct {
 	Mux              *http.ServeMux
 	GlobalContext    map[string]any
 	GlobalMiddleware []func(http.Handler) http.Handler
+	globalChain      http.Handler
 }
 
 func NewApp() *App {
@@ -32,14 +33,16 @@ func (app *App) SetContext(key string, value any) {
 }
 
 func (app *App) Handle(path string, handler http.HandlerFunc, middleware ...func(http.Handler) http.Handler) {
+	finalHandler := Chain(handler, middleware...)
 	app.Mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		r = SetContext("GLOBAL", app.GlobalContext, r)
 		// Only apply Local middleware here
-		Chain(handler, middleware...).ServeHTTP(w, r)
+		finalHandler.ServeHTTP(w, r)
 	})
 }
 
 func (app *App) Serve(port string) error {
+	app.globalChain = Chain(app.Mux.ServeHTTP, app.GlobalMiddleware...)
 	fmt.Println("starting server on port " + port + " 🚀")
 	err := http.ListenAndServe(":"+port, app)
 	if err != nil {
@@ -49,6 +52,8 @@ func (app *App) Serve(port string) error {
 }
 
 func (app *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	finalHandler := Chain(app.Mux.ServeHTTP, app.GlobalMiddleware...)
-	finalHandler.ServeHTTP(w, r)
+	if app.globalChain == nil {
+		app.globalChain = Chain(app.Mux.ServeHTTP, app.GlobalMiddleware...)
+	}
+	app.globalChain.ServeHTTP(w, r)
 }

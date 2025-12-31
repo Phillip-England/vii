@@ -28,8 +28,9 @@ func (g *Group) Handle(path string, handler http.HandlerFunc, middleware ...func
 	method := strings.Split(path, " ")[0]
 	// Only apply Group + Local middleware here
 	allMiddleware := append(g.middleware, middleware...)
+	finalHandler := Chain(handler, allMiddleware...)
 	g.parent.Mux.HandleFunc(method+" "+resolvedPath, func(w http.ResponseWriter, r *http.Request) {
 		r = SetContext("GLOBAL", g.parent.GlobalContext, r)
-		Chain(handler, allMiddleware...).ServeHTTP(w, r)
+		finalHandler.ServeHTTP(w, r)
 	})
 }
