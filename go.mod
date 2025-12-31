@@ -1,3 +1,3 @@
-module github.com/Phillip-England/vii
+module github.com/phillip-england/vii
 
 go 1.25.0
